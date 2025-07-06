@@ -10,6 +10,9 @@ services:
       - YOUR_TELEGRAM_CHAT_ID=${YOUR_TELEGRAM_CHAT_ID}
     volumes:
       - ./data:/app/data
+    devices:
+      - /dev/i2c-1:/dev/i2c-1  # I2C device access
+    privileged: true  # Required for I2C access
     networks:
       - k9logbot-network
     logging:
