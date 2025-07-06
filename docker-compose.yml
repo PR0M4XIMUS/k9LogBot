@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  k9logbot:
+    build: .
+    container_name: k9logbot
+    restart: unless-stopped
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - YOUR_TELEGRAM_CHAT_ID=${YOUR_TELEGRAM_CHAT_ID}
+    volumes:
+      - ./data:/app/data
+    networks:
+      - k9logbot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  k9logbot-network:
+    driver: bridge
