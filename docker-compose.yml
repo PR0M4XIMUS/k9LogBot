@@ -5,11 +5,20 @@ services:
     build: .
     container_name: k9logbot
     restart: unless-stopped
+    privileged: true  # Required for I2C access
     environment:
       - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
       - YOUR_TELEGRAM_CHAT_ID=${YOUR_TELEGRAM_CHAT_ID}
+      - OLED_ENABLED=${OLED_ENABLED:-true}
+      - OLED_WIDTH=${OLED_WIDTH:-128}
+      - OLED_HEIGHT=${OLED_HEIGHT:-64}
+      - OLED_ADDRESS=${OLED_ADDRESS:-0x3C}
+      - OLED_SCREEN_INTERVAL=${OLED_SCREEN_INTERVAL:-5}
+    devices:
+      - "/dev/i2c-1:/dev/i2c-1"  # I2C device access
     volumes:
       - ./data:/app/data
+      - /sys:/sys:ro  # For hardware access
     networks:
       - k9logbot-network
     logging:
@@ -17,6 +26,12 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8080/health', timeout=10)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
 networks:
   k9logbot-network:

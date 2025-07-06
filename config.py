@@ -15,3 +15,10 @@ try:
 except (ValueError, TypeError):
     YOUR_TELEGRAM_CHAT_ID = 0
     print("Warning: YOUR_TELEGRAM_CHAT_ID is not set or invalid. Weekly reports will not be sent.")
+
+# OLED Display Configuration
+OLED_ENABLED = os.getenv("OLED_ENABLED", "true").lower() == "true"
+OLED_WIDTH = int(os.getenv("OLED_WIDTH", "128"))
+OLED_HEIGHT = int(os.getenv("OLED_HEIGHT", "64"))
+OLED_ADDRESS = int(os.getenv("OLED_ADDRESS", "0x3C"), 16)  # Support hex format
+OLED_SCREEN_INTERVAL = int(os.getenv("OLED_SCREEN_INTERVAL", "5"))  # seconds

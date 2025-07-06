@@ -19,6 +19,7 @@ from database import (
     get_weekly_report_data, get_all_transactions_for_report
 )
 from config import YOUR_TELEGRAM_CHAT_ID  # Import your Telegram chat ID from config.py
+from oled_display import get_oled_manager  # Import OLED display manager
 
 # --- Set up Logging ---
 # This helps us see what the bot is doing and debug problems.
@@ -81,6 +82,12 @@ async def add_walk_command(update, context):
     """Records a dog walk and updates the balance."""
     add_walk()  # Call the database function to add a walk. This is synchronous, no 'await'.
     current_balance = get_current_balance()  # Get the updated balance.
+    
+    # Send OLED notification
+    oled_manager = get_oled_manager()
+    if oled_manager:
+        oled_manager.show_notification(f"Walk added! Balance: {current_balance:.2f} MDL")
+    
     await update.message.reply_text(
         f"✅ Walk recorded! Current balance: *{current_balance:.2f} MDL*",
         parse_mode=ParseMode.MARKDOWN  # Use Markdown for bold text
@@ -119,6 +126,12 @@ async def set_initial_balance_command(update, context):
         amount = float(context.args[0])  # Convert the provided text to a number
         set_initial_balance(amount)  # Update the balance in the database
         current_balance = get_current_balance()
+        
+        # Send OLED notification
+        oled_manager = get_oled_manager()
+        if oled_manager:
+            oled_manager.show_notification(f"Initial balance set: {current_balance:.2f} MDL")
+        
         await update.message.reply_text(
             f"Initial balance set to *{current_balance:.2f} MDL*.",
             parse_mode=ParseMode.MARKDOWN
@@ -189,6 +202,12 @@ async def receive_credit_amount(update, context):
 
         record_credit_given(amount, f"Credit (advance) of {amount:.2f} MDL")  # Record the credit
         current_balance = get_current_balance()  # Get the new balance
+        
+        # Send OLED notification
+        oled_manager = get_oled_manager()
+        if oled_manager:
+            oled_manager.show_notification(f"Credit given: {amount:.2f} MDL")
+        
         await update.message.reply_text(
             f"✅ Credit of *{amount:.2f} MDL* recorded. "
             f"Current balance: *{current_balance:.2f} MDL*.",
@@ -244,6 +263,12 @@ async def cashout_type_chosen(update, context):
 
         record_payment(current_balance, "Full settlement (paid out all balance)")  # Record the full payment
         new_balance = get_current_balance()  # Get the new balance after payout
+        
+        # Send OLED notification
+        oled_manager = get_oled_manager()
+        if oled_manager:
+            oled_manager.show_notification(f"Full payment: {current_balance:.2f} MDL")
+        
         await query.edit_message_text(  # Edit the message with the outcome
             f"✅ *{current_balance:.2f} MDL* was paid out.\n"
             f"Current balance: *{new_balance:.2f} MDL*.",
@@ -269,6 +294,12 @@ async def receive_manual_cashout_amount(update, context):
 
         record_payment(amount, f"Manual cash out of {amount:.2f} MDL")  # Record the payment
         current_balance = get_current_balance()  # Get the new balance
+        
+        # Send OLED notification
+        oled_manager = get_oled_manager()
+        if oled_manager:
+            oled_manager.show_notification(f"Payment made: {amount:.2f} MDL")
+        
         await update.message.reply_text(
             f"✅ Recorded payout of *{amount:.2f} MDL*.\n"
             f"Current balance: *{current_balance:.2f} MDL*.",

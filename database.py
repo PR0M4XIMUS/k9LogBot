@@ -159,3 +159,40 @@ def get_all_transactions_for_report():
             ORDER BY timestamp DESC
         ''')
         return cursor.fetchall()
+
+def get_statistics():
+    """Get comprehensive statistics for OLED display."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get total walks
+        cursor.execute('''
+            SELECT COUNT(*) FROM transactions 
+            WHERE transaction_type = 'walk'
+        ''')
+        total_walks = cursor.fetchone()[0]
+        
+        # Get walks today
+        cursor.execute('''
+            SELECT COUNT(*) FROM transactions 
+            WHERE transaction_type = 'walk' 
+            AND date(timestamp) = date('now')
+        ''')
+        walks_today = cursor.fetchone()[0]
+        
+        # Get total earned from walks
+        cursor.execute('''
+            SELECT COALESCE(SUM(amount), 0) FROM transactions 
+            WHERE transaction_type = 'walk'
+        ''')
+        total_earned = cursor.fetchone()[0]
+        
+        # Get current balance
+        current_balance = get_current_balance()
+        
+        return {
+            'total_walks': total_walks,
+            'walks_today': walks_today,
+            'total_earned': total_earned,
+            'current_balance': current_balance
+        }
