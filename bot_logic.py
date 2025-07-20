@@ -13,8 +13,8 @@ from database import (
     set_initial_balance, record_payment, record_credit_given,
     get_weekly_report_data, get_all_transactions_for_report
 )
-from config import YOUR_TELEGRAM_CHAT_ID, is_admin
-from report_cleanup import clean_detailed_report
+from config import YOUR_TELEGRAM_CHAT_ID, is_admin, ADMIN_CHAT_IDS
+from report_cleanup import clean_detailed_report, get_report_entries
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
@@ -24,13 +24,18 @@ logger = logging.getLogger(__name__)
 # States for Conversation Handlers
 ASK_CREDIT_AMOUNT, RECEIVE_CREDIT_AMOUNT = range(2)
 ASK_CASHOUT_TYPE, ASK_MANUAL_CASHOUT_AMOUNT, RECEIVE_MANUAL_CASHOUT_AMOUNT = range(3)
+ASK_CLEANUP_START_DATE, ASK_CLEANUP_END_DATE, CONFIRM_CLEANUP = range(3)
 
-# Keyboard Definitions
-MAIN_KEYBOARD = ReplyKeyboardMarkup([
-    [KeyboardButton("➕ Add Walk"), KeyboardButton("💰 Current Balance")],
-    [KeyboardButton("📊 Detailed Report"), KeyboardButton("❓ Help")],
-    [KeyboardButton("💳 Give Credit"), KeyboardButton("💸 Cash Out")]
-], resize_keyboard=True)
+# Keyboard Definitions (Admin gets cleanup button)
+def get_main_keyboard(chat_id):
+    buttons = [
+        [KeyboardButton("➕ Add Walk"), KeyboardButton("💰 Current Balance")],
+        [KeyboardButton("📊 Detailed Report"), KeyboardButton("❓ Help")],
+        [KeyboardButton("💳 Give Credit"), KeyboardButton("💸 Cash Out")]
+    ]
+    if is_admin(chat_id):
+        buttons.append([KeyboardButton("🗑️ Cleanup Detailed Report")])
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
 
 def get_cashout_inline_keyboard(balance):
     return InlineKeyboardMarkup([
@@ -38,35 +43,29 @@ def get_cashout_inline_keyboard(balance):
         [InlineKeyboardButton("✏️ Manual Amount", callback_data="cashout_manual")]
     ])
 
-# Conversation Handler Functions for "Give Credit"
+# --- Conversation Handlers ---
+
 async def credit_start(update, context):
-    """Starts the 'Give Credit' conversation."""
     await update.message.reply_text("Please enter the credit amount (in MDL).")
     return ASK_CREDIT_AMOUNT
 
 async def receive_credit_amount(update, context):
-    """Receives the credit amount and records the transaction."""
     if global_stats_manager:
         global_stats_manager.record_activity()
-    
     try:
         amount = float(update.message.text)
         if amount <= 0:
             await update.message.reply_text("Credit amount must be positive. Please try again.")
             return ASK_CREDIT_AMOUNT
-
         record_credit_given(amount, f"Credit (advance) of {amount:.2f} MDL")
         current_balance = get_current_balance()
-        
-        # Show notification on OLED
         if global_oled_display:
             global_oled_display.show_notification(f"Credit: -{amount:.0f} MDL", 3)
-        
         await update.message.reply_text(
             f"✅ Credit of *{amount:.2f} MDL* recorded. "
             f"Current balance: *{current_balance:.2f} MDL*.",
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=MAIN_KEYBOARD
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
         return ConversationHandler.END
     except ValueError:
@@ -78,13 +77,10 @@ async def receive_credit_amount(update, context):
         return ConversationHandler.END
 
 async def credit_cancel(update, context):
-    """Cancels the 'Give Credit' conversation."""
-    await update.message.reply_text('Operation "Give Credit" cancelled.', reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text('Operation "Give Credit" cancelled.', reply_markup=get_main_keyboard(update.effective_chat.id))
     return ConversationHandler.END
 
-# Conversation Handler Functions for "Cash Out"
 async def cashout_start(update, context):
-    """Starts the 'Cash Out' conversation."""
     current_balance = get_current_balance()
     keyboard = get_cashout_inline_keyboard(current_balance)
     await update.message.reply_text(
@@ -96,13 +92,10 @@ async def cashout_start(update, context):
     return ASK_CASHOUT_TYPE
 
 async def cashout_type_chosen(update, context):
-    """Handles the choice between full cash out or manual amount."""
     if global_stats_manager:
         global_stats_manager.record_activity()
-    
     query = update.callback_query
     await query.answer()
-
     if query.data == "cashout_all":
         current_balance = get_current_balance()
         if current_balance <= 0:
@@ -112,50 +105,39 @@ async def cashout_type_chosen(update, context):
                 reply_markup=None
             )
             return ConversationHandler.END
-
         record_payment(current_balance, "Full settlement")
         new_balance = get_current_balance()
-        
-        # Show notification on OLED
         if global_oled_display:
             global_oled_display.show_notification(f"Paid Out: {current_balance:.0f}", 3)
-        
         await query.edit_message_text(
             f"✅ *{current_balance:.2f} MDL* was paid out.\n"
             f"Current balance: *{new_balance:.2f} MDL*.",
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=None
         )
-        await query.message.reply_text("Operation completed.", reply_markup=MAIN_KEYBOARD)
+        await query.message.reply_text("Operation completed.", reply_markup=get_main_keyboard(query.message.chat.id))
         return ConversationHandler.END
-
     elif query.data == "cashout_manual":
         await query.edit_message_text("Please enter the amount to pay out (in MDL).")
         return ASK_MANUAL_CASHOUT_AMOUNT
 
 async def receive_manual_cashout_amount(update, context):
-    """Receives the manual cash out amount and records the payment."""
     if global_stats_manager:
         global_stats_manager.record_activity()
-    
     try:
         amount = float(update.message.text)
         if amount == 0:
             await update.message.reply_text("Amount must be greater than zero. Please try again.")
             return ASK_MANUAL_CASHOUT_AMOUNT
-
         record_payment(amount, f"Manual cash out of {amount:.2f} MDL")
         current_balance = get_current_balance()
-        
-        # Show notification on OLED
         if global_oled_display:
             global_oled_display.show_notification(f"Cash Out: {amount:.0f}", 3)
-        
         await update.message.reply_text(
             f"✅ Recorded payout of *{amount:.2f} MDL*.\n"
             f"Current balance: *{current_balance:.2f} MDL*.",
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=MAIN_KEYBOARD
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
         return ConversationHandler.END
     except ValueError:
@@ -167,19 +149,19 @@ async def receive_manual_cashout_amount(update, context):
         return ConversationHandler.END
 
 async def cashout_cancel(update, context):
-    """Cancels the 'Cash Out' conversation."""
-    await update.message.reply_text('Operation "Cash Out" cancelled.', reply_markup=MAIN_KEYBOARD)
+    await update.message.reply_text('Operation "Cash Out" cancelled.', reply_markup=get_main_keyboard(update.effective_chat.id))
     return ConversationHandler.END
 
-# --- NEW: Detailed Report Command with Admin Cleanup ---
+# --- Enhanced Detailed Report Command ---
 async def detailed_report_command(update, context):
     chat_id = update.effective_chat.id
-    # Prepare your regular report data
     transactions = get_all_transactions_for_report()
     walk_count = len([t for t in transactions if t[2] == 'walk'])
     walk_total_amount = sum([t[1] for t in transactions if t[2] == 'walk'])
     current_balance = get_current_balance()
     total_payment_credit_amount = sum([t[1] for t in transactions if t[2] in ('credit', 'payment')])
+    walks = [t for t in transactions if t[2] == 'walk']
+    walk_details = "\n".join([f"{t[0][:10]} - {t[1]:.2f} MDL" for t in walks]) or "No walks recorded."
 
     report_message = (
         f"*Detailed Report ({datetime.now().strftime('%Y-%m-%d')})*\n\n"
@@ -187,13 +169,12 @@ async def detailed_report_command(update, context):
         f"Total amount earned from walks: *{walk_total_amount:.2f} MDL*\n"
         f"Current outstanding balance: *{current_balance:.2f} MDL*\n"
         f"Total payments/credits received: *{total_payment_credit_amount:.2f} MDL*\n\n"
+        f"*Walks:*\n{walk_details}"
     )
-    await update.message.reply_text(report_message, parse_mode=ParseMode.MARKDOWN)
-
-    # Show admin-only cleanup button if user is admin
+    await update.message.reply_text(report_message, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(chat_id))
     if is_admin(chat_id):
         keyboard = [
-            [InlineKeyboardButton("🗑️ Clean Up Detailed Report", callback_data="clean_report")],
+            [InlineKeyboardButton("🗑️ Cleanup Detailed Report", callback_data="cleanup_start")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await update.message.reply_text(
@@ -201,48 +182,76 @@ async def detailed_report_command(update, context):
             reply_markup=reply_markup
         )
 
-# --- NEW: Callback Handler for Admin Cleanup Button ---
-async def button_callback(update, context):
+# --- Cleanup Conversation (Admin Only) ---
+async def cleanup_start_callback(update, context):
     query = update.callback_query
     chat_id = query.message.chat.id
-
-    if query.data == "clean_report":
-        if not is_admin(chat_id):
-            await query.answer("Access denied: admin only.", show_alert=True)
-            return
-        await query.message.reply_text("Please enter the date range in format:\nYYYY-MM-DD YYYY-MM-DD")
-        context.user_data["await_report_cleanup"] = True
-
-# --- NEW: Message Handler for Admin Date Entry ---
-async def handle_admin_cleanup_dates(update, context):
-    chat_id = update.effective_chat.id
-    text = update.message.text.strip()
     if not is_admin(chat_id):
-        return
-    if context.user_data.get("await_report_cleanup", False):
-        try:
-            from_date, to_date = text.split()
-            result = clean_detailed_report(from_date, to_date)
-            if result["success"]:
-                await update.message.reply_text(
-                    f"Report cleaned from {from_date} to {to_date}. Deleted {result['deleted_count']} entries."
-                )
-            else:
-                await update.message.reply_text(
-                    f"Failed to clean report: {result['error']}"
-                )
-        except Exception as e:
-            await update.message.reply_text(
-                "Invalid format. Please enter two dates: YYYY-MM-DD YYYY-MM-DD"
+        await query.answer("Access denied.", show_alert=True)
+        return ConversationHandler.END
+    await query.message.reply_text("Enter START date for cleanup (YYYY-MM-DD):")
+    context.user_data.clear()
+    return ASK_CLEANUP_START_DATE
+
+async def cleanup_get_start_date(update, context):
+    context.user_data["cleanup_start_date"] = update.message.text.strip()
+    await update.message.reply_text("Enter END date for cleanup (YYYY-MM-DD):")
+    return ASK_CLEANUP_END_DATE
+
+async def cleanup_get_end_date(update, context):
+    context.user_data["cleanup_end_date"] = update.message.text.strip()
+    from_date = context.user_data["cleanup_start_date"]
+    to_date = context.user_data["cleanup_end_date"]
+    entries = get_report_entries(from_date, to_date)
+    walks = [e for e in entries if e["type"] == "walk"]
+    if walks:
+        summary = "\n".join([f"{w['date'][:10]} - {w['amount']:.2f} MDL" for w in walks])
+        msg = (
+            f"Walks from {from_date} to {to_date}:\n"
+            f"{summary}\n"
+            f"Total walks: {len(walks)}\n"
+            "Confirm cleanup?"
+        )
+    else:
+        msg = f"No walks found between {from_date} and {to_date}. Cancelled."
+        await update.message.reply_text(msg)
+        return ConversationHandler.END
+    await update.message.reply_text(
+        msg,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Yes", callback_data="cleanup_yes"),
+             InlineKeyboardButton("❌ No", callback_data="cleanup_no")]
+        ])
+    )
+    context.user_data["cleanup_walk_count"] = len(walks)
+    return CONFIRM_CLEANUP
+
+async def cleanup_confirm(update, context):
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    if not is_admin(chat_id):
+        await query.answer("Access denied.", show_alert=True)
+        return ConversationHandler.END
+    if query.data == "cleanup_yes":
+        from_date = context.user_data["cleanup_start_date"]
+        to_date = context.user_data["cleanup_end_date"]
+        result = clean_detailed_report(from_date, to_date)
+        if result["success"]:
+            await query.edit_message_text(
+                f"Deleted {result['deleted_count']} entries (including {context.user_data['cleanup_walk_count']} walks) from {from_date} to {to_date}.",
+                reply_markup=get_main_keyboard(chat_id)
             )
-        finally:
-            context.user_data["await_report_cleanup"] = False
+        else:
+            await query.edit_message_text(f"Failed: {result['error']}", reply_markup=get_main_keyboard(chat_id))
+    else:
+        await query.edit_message_text("Cleanup cancelled.", reply_markup=get_main_keyboard(chat_id))
+    return ConversationHandler.END
 
 # --- Other Standard Commands ---
 async def start(update, context):
     await update.message.reply_text(
         "Welcome to k9LogBot! Use the buttons below or commands to interact.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=get_main_keyboard(update.effective_chat.id)
     )
 
 async def help_command(update, context):
@@ -253,7 +262,7 @@ async def help_command(update, context):
         "/setinitial - Set initial balance\n"
         "/report - Show detailed report\n"
         "Or use the buttons below.",
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=get_main_keyboard(update.effective_chat.id)
     )
 
 async def add_walk_command(update, context):
@@ -262,7 +271,7 @@ async def add_walk_command(update, context):
     await update.message.reply_text(
         f"✅ Walk recorded. Current balance: *{current_balance:.2f} MDL*.",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=get_main_keyboard(update.effective_chat.id)
     )
 
 async def balance_command(update, context):
@@ -270,7 +279,7 @@ async def balance_command(update, context):
     await update.message.reply_text(
         f"Current balance: *{current_balance:.2f} MDL*.",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=MAIN_KEYBOARD
+        reply_markup=get_main_keyboard(update.effective_chat.id)
     )
 
 async def set_initial_balance_command(update, context):
@@ -284,7 +293,7 @@ async def receive_initial_balance(update, context):
         await update.message.reply_text(
             f"Initial balance set to *{amount:.2f} MDL*.",
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=MAIN_KEYBOARD
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
     except Exception:
         await update.message.reply_text("Invalid amount. Please enter a number.")
@@ -331,6 +340,20 @@ def setup_handlers(application, stats_manager=None, oled_display=None):
     )
     application.add_handler(cashout_conv_handler)
 
+    # --- Admin Cleanup ConversationHandler ---
+    cleanup_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(cleanup_start_callback, pattern="^cleanup_start$"),
+                     MessageHandler(filters.Regex("^🗑️ Cleanup Detailed Report$"), cleanup_start_callback)],
+        states={
+            ASK_CLEANUP_START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cleanup_get_start_date)],
+            ASK_CLEANUP_END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cleanup_get_end_date)],
+            CONFIRM_CLEANUP: [CallbackQueryHandler(cleanup_confirm, pattern="^cleanup_yes$|^cleanup_no$")],
+        },
+        fallbacks=[CommandHandler("cancel", lambda u, c: ConversationHandler.END)],
+        allow_reentry=True
+    )
+    application.add_handler(cleanup_conv_handler)
+
     # Regular Command Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
@@ -344,13 +367,6 @@ def setup_handlers(application, stats_manager=None, oled_display=None):
     application.add_handler(MessageHandler(filters.Regex("^💰 Current Balance$"), balance_command))
     application.add_handler(MessageHandler(filters.Regex("^📊 Detailed Report$"), detailed_report_command))
     application.add_handler(MessageHandler(filters.Regex("^❓ Help$"), help_command))
-
-    # Admin cleanup callback and message handlers
-    application.add_handler(CallbackQueryHandler(button_callback))
-    application.add_handler(MessageHandler(
-        filters.Regex(r"\d{4}-\d{2}-\d{2} \d{4}-\d{2}-\d{2}") & filters.TEXT,
-        handle_admin_cleanup_dates
-    ))
 
     # Set initial balance entry handler
     application.add_handler(MessageHandler(
@@ -381,6 +397,5 @@ async def send_scheduled_report(bot_instance):
     )
     logger.info("Sent weekly report.")
 
-    # Show notification on OLED
     if global_oled_display:
         global_oled_display.show_notification("Weekly Report Sent", 3)
