@@ -1,4 +1,5 @@
 # bot_logic.py
+
 from telegram.ext import (
     CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
 )
@@ -12,7 +13,8 @@ from database import (
     set_initial_balance, record_payment, record_credit_given,
     get_weekly_report_data, get_all_transactions_for_report
 )
-from config import YOUR_TELEGRAM_CHAT_ID
+from config import YOUR_TELEGRAM_CHAT_ID, is_admin
+from report_cleanup import clean_detailed_report
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
@@ -26,146 +28,15 @@ ASK_CASHOUT_TYPE, ASK_MANUAL_CASHOUT_AMOUNT, RECEIVE_MANUAL_CASHOUT_AMOUNT = ran
 # Keyboard Definitions
 MAIN_KEYBOARD = ReplyKeyboardMarkup([
     [KeyboardButton("➕ Add Walk"), KeyboardButton("💰 Current Balance")],
-    [KeyboardButton("💳 Give Credit"), KeyboardButton("💸 Cash Out")],
     [KeyboardButton("📊 Detailed Report"), KeyboardButton("❓ Help")],
-], resize_keyboard=True, one_time_keyboard=False)
+    [KeyboardButton("💳 Give Credit"), KeyboardButton("💸 Cash Out")]
+], resize_keyboard=True)
 
-def get_cashout_inline_keyboard(current_balance):
-    """Creates an inline keyboard for the Cash Out process."""
-    keyboard = [
-        [InlineKeyboardButton(f"Pay All ({current_balance:.2f} MDL)", callback_data="cashout_all")],
-        [InlineKeyboardButton("Enter Amount Manually", callback_data="cashout_manual")],
-    ]
-    return InlineKeyboardMarkup(keyboard)
-
-# Global references (will be set in setup_handlers)
-global_stats_manager = None
-global_oled_display = None
-
-# Command Handlers
-async def start(update, context):
-    """Sends a welcome message and displays the main keyboard buttons."""
-    if global_stats_manager:
-        global_stats_manager.record_activity()
-    
-    message = (
-        "Hello! I'm your dog walking payment tracker bot.\n\n"
-        "Use the buttons below for quick actions, or type a command.\n\n"
-        "Available commands:\n"
-        "/addwalk - Records a dog walk (75 MDL).\n"
-        "/balance - Shows your current balance.\n"
-        "/credit - Records credit given (e.g., Nana pays you an advance).\n"
-        "/cashout - Records money you pay out (e.g., to Nana).\n"
-        "/report - Get a detailed report of all transactions.\n"
-        "/setinitial <amount> - Set the initial balance.\n"
-        "/help - Shows this message again."
-    )
-    await update.message.reply_text(message, reply_markup=MAIN_KEYBOARD)
-
-async def add_walk_command(update, context):
-    """Records a dog walk and updates the balance."""
-    if global_stats_manager:
-        global_stats_manager.record_activity()
-    
-    add_walk()
-    current_balance = get_current_balance()
-    
-    # Show notification on OLED
-    if global_oled_display:
-        global_oled_display.show_notification("Walk Added! +75 MDL", 3)
-    
-    await update.message.reply_text(
-        f"✅ Walk recorded! Current balance: *{current_balance:.2f} MDL*",
-        parse_mode=ParseMode.MARKDOWN
-    )
-
-async def balance_command(update, context):
-    """Shows the current outstanding balance with clear labels."""
-    if global_stats_manager:
-        global_stats_manager.record_activity()
-    
-    current_balance = get_current_balance()
-    if current_balance > 0:
-        status_text = f"Current Balance: *{current_balance:.2f} MDL* (They owe you)"
-    elif current_balance < 0:
-        status_text = f"Current Balance: *{abs(current_balance):.2f} MDL* (You owe them)"
-    else:
-        status_text = "Current Balance: *0.00 MDL* (Balance is zero)"
-
-    await update.message.reply_text(status_text, parse_mode=ParseMode.MARKDOWN)
-
-async def help_command(update, context):
-    """Sends the help message."""
-    await start(update, context)
-
-async def set_initial_balance_command(update, context):
-    """Sets an initial balance manually."""
-    if global_stats_manager:
-        global_stats_manager.record_activity()
-    
-    try:
-        if not context.args:
-            await update.message.reply_text(
-                "Please provide an amount. Usage: `/setinitial <amount>`\n"
-                "Example: `/setinitial 0` (reset), `/setinitial -150` (overpaid)",
-                parse_mode=ParseMode.MARKDOWN
-            )
-            return
-
-        amount = float(context.args[0])
-        set_initial_balance(amount)
-        current_balance = get_current_balance()
-        
-        # Show notification on OLED
-        if global_oled_display:
-            global_oled_display.show_notification(f"Balance Set: {amount:.0f}", 3)
-        
-        await update.message.reply_text(
-            f"Initial balance set to *{current_balance:.2f} MDL*.",
-            parse_mode=ParseMode.MARKDOWN
-        )
-    except ValueError:
-        await update.message.reply_text("Invalid amount. Please enter a number.")
-    except Exception as e:
-        logger.error(f"Error setting initial balance: {e}")
-        await update.message.reply_text("An error occurred while setting the initial balance.")
-
-async def detailed_report_command(update, context):
-    """Provides a detailed report of all financial transactions."""
-    if global_stats_manager:
-        global_stats_manager.record_activity()
-    
-    transactions = get_all_transactions_for_report()
-    current_balance = get_current_balance()
-
-    if not transactions:
-        report_message = "No transactions found."
-    else:
-        report_message = "*Detailed Transaction Report:*\n\n"
-        for ts, amount, tr_type, desc in transactions:
-            timestamp = datetime.fromisoformat(ts)
-            if tr_type == 'walk':
-                type_display = "Walk"
-            elif tr_type == 'payment':
-                type_display = "Payment"
-            elif tr_type == 'credit_given':
-                type_display = "Credit Given"
-            elif tr_type == 'manual_cashout':
-                type_display = "Cash Out"
-            else:
-                type_display = tr_type
-
-            report_message += f"`{timestamp.strftime('%Y-%m-%d %H:%M')}`: {type_display}: *{amount:.2f} MDL*\n"
-
-        report_message += "\n"
-        if current_balance > 0:
-            report_message += f"*Total: To Be Paid: {current_balance:.2f} MDL*\n"
-        elif current_balance < 0:
-            report_message += f"*Total: Overpaid: {abs(current_balance):.2f} MDL*\n"
-        else:
-            report_message += "*Total: Balance is Zero: 0.00 MDL*\n"
-
-    await update.message.reply_text(report_message, parse_mode=ParseMode.MARKDOWN)
+def get_cashout_inline_keyboard(balance):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(f"💸 Pay Out All ({balance:.2f} MDL)", callback_data="cashout_all")],
+        [InlineKeyboardButton("✏️ Manual Amount", callback_data="cashout_manual")]
+    ])
 
 # Conversation Handler Functions for "Give Credit"
 async def credit_start(update, context):
@@ -300,20 +171,138 @@ async def cashout_cancel(update, context):
     await update.message.reply_text('Operation "Cash Out" cancelled.', reply_markup=MAIN_KEYBOARD)
     return ConversationHandler.END
 
+# --- NEW: Detailed Report Command with Admin Cleanup ---
+async def detailed_report_command(update, context):
+    chat_id = update.effective_chat.id
+    # Prepare your regular report data
+    transactions = get_all_transactions_for_report()
+    walk_count = len([t for t in transactions if t[2] == 'walk'])
+    walk_total_amount = sum([t[1] for t in transactions if t[2] == 'walk'])
+    current_balance = get_current_balance()
+    total_payment_credit_amount = sum([t[1] for t in transactions if t[2] in ('credit', 'payment')])
+
+    report_message = (
+        f"*Detailed Report ({datetime.now().strftime('%Y-%m-%d')})*\n\n"
+        f"Walks completed: *{walk_count}*\n"
+        f"Total amount earned from walks: *{walk_total_amount:.2f} MDL*\n"
+        f"Current outstanding balance: *{current_balance:.2f} MDL*\n"
+        f"Total payments/credits received: *{total_payment_credit_amount:.2f} MDL*\n\n"
+    )
+    await update.message.reply_text(report_message, parse_mode=ParseMode.MARKDOWN)
+
+    # Show admin-only cleanup button if user is admin
+    if is_admin(chat_id):
+        keyboard = [
+            [InlineKeyboardButton("🗑️ Clean Up Detailed Report", callback_data="clean_report")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(
+            "Admin: You can clean up the detailed report for a date range.",
+            reply_markup=reply_markup
+        )
+
+# --- NEW: Callback Handler for Admin Cleanup Button ---
+async def button_callback(update, context):
+    query = update.callback_query
+    chat_id = query.message.chat.id
+
+    if query.data == "clean_report":
+        if not is_admin(chat_id):
+            await query.answer("Access denied: admin only.", show_alert=True)
+            return
+        await query.message.reply_text("Please enter the date range in format:\nYYYY-MM-DD YYYY-MM-DD")
+        context.user_data["await_report_cleanup"] = True
+
+# --- NEW: Message Handler for Admin Date Entry ---
+async def handle_admin_cleanup_dates(update, context):
+    chat_id = update.effective_chat.id
+    text = update.message.text.strip()
+    if not is_admin(chat_id):
+        return
+    if context.user_data.get("await_report_cleanup", False):
+        try:
+            from_date, to_date = text.split()
+            result = clean_detailed_report(from_date, to_date)
+            if result["success"]:
+                await update.message.reply_text(
+                    f"Report cleaned from {from_date} to {to_date}. Deleted {result['deleted_count']} entries."
+                )
+            else:
+                await update.message.reply_text(
+                    f"Failed to clean report: {result['error']}"
+                )
+        except Exception as e:
+            await update.message.reply_text(
+                "Invalid format. Please enter two dates: YYYY-MM-DD YYYY-MM-DD"
+            )
+        finally:
+            context.user_data["await_report_cleanup"] = False
+
+# --- Other Standard Commands ---
+async def start(update, context):
+    await update.message.reply_text(
+        "Welcome to k9LogBot! Use the buttons below or commands to interact.",
+        reply_markup=MAIN_KEYBOARD
+    )
+
+async def help_command(update, context):
+    await update.message.reply_text(
+        "Available commands:\n"
+        "/addwalk - Add a walk\n"
+        "/balance - Show current balance\n"
+        "/setinitial - Set initial balance\n"
+        "/report - Show detailed report\n"
+        "Or use the buttons below.",
+        reply_markup=MAIN_KEYBOARD
+    )
+
+async def add_walk_command(update, context):
+    add_walk()
+    current_balance = get_current_balance()
+    await update.message.reply_text(
+        f"✅ Walk recorded. Current balance: *{current_balance:.2f} MDL*.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_KEYBOARD
+    )
+
+async def balance_command(update, context):
+    current_balance = get_current_balance()
+    await update.message.reply_text(
+        f"Current balance: *{current_balance:.2f} MDL*.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=MAIN_KEYBOARD
+    )
+
+async def set_initial_balance_command(update, context):
+    await update.message.reply_text("Please enter the initial balance (in MDL).")
+    context.user_data["await_initial_balance"] = True
+
+async def receive_initial_balance(update, context):
+    try:
+        amount = float(update.message.text)
+        set_initial_balance(amount)
+        await update.message.reply_text(
+            f"Initial balance set to *{amount:.2f} MDL*.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=MAIN_KEYBOARD
+        )
+    except Exception:
+        await update.message.reply_text("Invalid amount. Please enter a number.")
+    finally:
+        context.user_data["await_initial_balance"] = False
+
 # Global Error Handler
 async def error(update, context):
-    """Logs errors and sends a friendly message."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
     if update and update.effective_message:
         await update.effective_message.reply_text("Oops! Something went wrong. Please try again or use /help.")
 
-# Setup Handlers for the Application
+# Handler Setup
 def setup_handlers(application, stats_manager=None, oled_display=None):
-    """Sets up all handlers for the Telegram Application."""
     global global_stats_manager, global_oled_display
     global_stats_manager = stats_manager
     global_oled_display = oled_display
-    
+
     # Conversation Handlers
     credit_conv_handler = ConversationHandler(
         entry_points=[
@@ -356,11 +345,23 @@ def setup_handlers(application, stats_manager=None, oled_display=None):
     application.add_handler(MessageHandler(filters.Regex("^📊 Detailed Report$"), detailed_report_command))
     application.add_handler(MessageHandler(filters.Regex("^❓ Help$"), help_command))
 
+    # Admin cleanup callback and message handlers
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(MessageHandler(
+        filters.Regex(r"\d{4}-\d{2}-\d{2} \d{4}-\d{2}-\d{2}") & filters.TEXT,
+        handle_admin_cleanup_dates
+    ))
+
+    # Set initial balance entry handler
+    application.add_handler(MessageHandler(
+        filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"),
+        receive_initial_balance
+    ))
+
     application.add_error_handler(error)
 
 # Scheduled Report Function
 async def send_scheduled_report(bot_instance):
-    """Sends a weekly report to the configured chat."""
     walk_count, walk_total_amount, total_payment_credit_amount = get_weekly_report_data()
     current_balance = get_current_balance()
 
@@ -379,7 +380,7 @@ async def send_scheduled_report(bot_instance):
         parse_mode=ParseMode.MARKDOWN
     )
     logger.info("Sent weekly report.")
-    
+
     # Show notification on OLED
     if global_oled_display:
         global_oled_display.show_notification("Weekly Report Sent", 3)
