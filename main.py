@@ -6,8 +6,8 @@ import time
 import logging
 
 # Import configuration details and bot's logic functions
-from config import TELEGRAM_BOT_TOKEN, YOUR_TELEGRAM_CHAT_ID
-from database import init_db, get_current_balance, get_all_transactions_for_report
+from config import TELEGRAM_BOT_TOKEN, YOUR_TELEGRAM_CHAT_ID, STATS_CACHE_DURATION
+from database import init_db, get_current_balance, get_all_transactions_for_report, get_stats_summary
 from bot_logic import setup_handlers, send_scheduled_report, error
 from oled_display import OLEDDisplayManager
 
@@ -23,28 +23,32 @@ class BotStatsManager:
         self.bot_running = False
         self.last_activity = datetime.now()
         self.message_count = 0
+        # Cache for database stats to reduce query frequency
+        self._stats_cache = {}
+        self._last_cache_update = None
+        self._cache_duration = STATS_CACHE_DURATION  # Configurable cache duration
         
     def get_stats(self):
         """Get current bot statistics for display."""
         uptime = (datetime.now() - self.start_time).total_seconds()
         
-        # Get database stats
-        transactions = get_all_transactions_for_report()
-        total_walks = len([t for t in transactions if t[2] == 'walk'])
-        total_earned = sum([t[1] for t in transactions if t[2] == 'walk'])
-        
-        # Walks today
-        today = datetime.now().date()
-        walks_today = len([t for t in transactions if t[2] == 'walk' and 
-                          datetime.fromisoformat(t[0]).date() == today])
+        # Use cached database stats to reduce load
+        now = datetime.now()
+        if (self._last_cache_update is None or 
+            (now - self._last_cache_update).total_seconds() > self._cache_duration):
+            
+            # Update cache with optimized database query
+            self._stats_cache = get_stats_summary()
+            self._stats_cache['current_balance'] = get_current_balance()
+            self._last_cache_update = now
         
         return {
             'bot_running': self.bot_running,
             'uptime': uptime,
-            'current_balance': get_current_balance(),
-            'total_walks': total_walks,
-            'walks_today': walks_today,
-            'total_earned': total_earned,
+            'current_balance': self._stats_cache.get('current_balance', 0.0),
+            'total_walks': self._stats_cache.get('total_walks', 0),
+            'walks_today': self._stats_cache.get('walks_today', 0),
+            'total_earned': self._stats_cache.get('total_earned', 0.0),
             'message_count': self.message_count,
             'last_activity': self.last_activity
         }
@@ -53,6 +57,8 @@ class BotStatsManager:
         """Record bot activity."""
         self.last_activity = datetime.now()
         self.message_count += 1
+        # Invalidate cache when activity occurs
+        self._last_cache_update = None
 
 # Global stats manager
 stats_manager = BotStatsManager()
