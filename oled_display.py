@@ -63,7 +63,7 @@ class OLEDDisplayManager:
                 elif self.current_screen == 1:
                     self._draw_chisinau_time_screen()
                 elif self.current_screen == 2:
-                    self._draw_retro_sunset_screen()
+                    self._draw_pixel_city_screen()
                 
                 # Cycle through screens every 5 seconds
                 time.sleep(5)
@@ -119,61 +119,60 @@ class OLEDDisplayManager:
             
             draw.text((90, 54), "Screen 2/3", fill="white")
     
-    def _draw_retro_sunset_screen(self):
-        """Draw a cute pixel art retro sunset screen."""
+    def _draw_pixel_city_screen(self):
+        """Draw a nice pixel art city skyline screen."""
         with canvas(self.device) as draw:
             # Title
-            draw.text((0, 0), "RETRO SUNSET", fill="white")
+            draw.text((0, 0), "PIXEL CITY", fill="white")
             draw.text((0, 12), "=" * 14, fill="white")
             
-            # Draw sky layers (horizontal lines for gradient effect)
-            for y in range(15, 25):
-                draw.line([(0, y), (127, y)], fill="white")
-            
-            # Draw sun (circle in upper part)
-            sun_center_x, sun_center_y = 100, 20
-            sun_radius = 6
-            for angle in range(0, 360, 30):  # Draw sun as points in circle
-                x = sun_center_x + int(sun_radius * math.cos(math.radians(angle)))
-                y = sun_center_y + int(sun_radius * math.sin(math.radians(angle)))
-                if 0 <= x <= 127 and 0 <= y <= 63:
-                    draw.point((x, y), fill="white")
-            
-            # Draw sun center
-            for dx in range(-2, 3):
-                for dy in range(-2, 3):
-                    if abs(dx) + abs(dy) <= 2:
-                        x, y = sun_center_x + dx, sun_center_y + dy
-                        if 0 <= x <= 127 and 0 <= y <= 63:
-                            draw.point((x, y), fill="white")
-            
-            # Draw mountain/hills silhouette
-            mountain_points = [
-                (0, 35), (20, 30), (40, 25), (60, 30), (80, 28), (100, 32), (127, 35)
+            # Draw pixel art buildings with different heights
+            buildings = [
+                {"x": 5, "width": 8, "height": 25, "windows": [(1, 3), (5, 3), (1, 8), (5, 8)]},
+                {"x": 18, "width": 12, "height": 30, "windows": [(2, 5), (8, 5), (2, 12), (8, 12), (2, 18), (8, 18)]},
+                {"x": 35, "width": 6, "height": 20, "windows": [(1, 3), (4, 3), (1, 8)]},
+                {"x": 46, "width": 10, "height": 35, "windows": [(2, 4), (6, 4), (2, 12), (6, 12), (2, 20), (6, 20), (2, 28), (6, 28)]},
+                {"x": 61, "width": 8, "height": 22, "windows": [(1, 3), (5, 3), (1, 10), (5, 10)]},
+                {"x": 74, "width": 14, "height": 28, "windows": [(2, 4), (6, 4), (10, 4), (2, 12), (6, 12), (10, 12), (2, 20), (6, 20), (10, 20)]},
+                {"x": 93, "width": 7, "height": 18, "windows": [(1, 3), (4, 3), (1, 9)]},
+                {"x": 105, "width": 11, "height": 32, "windows": [(2, 4), (7, 4), (2, 12), (7, 12), (2, 20), (7, 20), (2, 28), (7, 28)]},
+                {"x": 121, "width": 6, "height": 15, "windows": [(1, 3), (4, 3)]}
             ]
-            for i in range(len(mountain_points) - 1):
-                draw.line([mountain_points[i], mountain_points[i + 1]], fill="white")
             
-            # Fill area below mountains
-            for y in range(36, 50):
-                draw.line([(0, y), (127, y)], fill="white")
+            # Draw buildings
+            for building in buildings:
+                x, width, height = building["x"], building["width"], building["height"]
+                base_y = 50
+                # Draw building outline (pixelated style)
+                for i in range(0, width, 2):  # Pixelated edges
+                    for j in range(0, height, 2):
+                        px, py = x + i, base_y - j
+                        if 0 <= px <= 127 and 0 <= py <= 63:
+                            if i == 0 or i >= width-2 or j == 0 or j >= height-2:
+                                draw.point((px, py), fill="white")
+                
+                # Draw windows
+                for wx, wy in building["windows"]:
+                    window_x, window_y = x + wx, base_y - wy - 2
+                    if 0 <= window_x <= 126 and 0 <= window_y <= 62:
+                        # 2x2 pixel windows
+                        draw.point((window_x, window_y), fill="white")
+                        draw.point((window_x+1, window_y), fill="white")
+                        draw.point((window_x, window_y+1), fill="white")
+                        draw.point((window_x+1, window_y+1), fill="white")
             
-            # Draw stylized palm tree on the left
-            # Tree trunk
-            draw.line([(15, 40), (15, 48)], fill="white")
-            draw.line([(16, 40), (16, 48)], fill="white")
+            # Draw pixelated stars in the sky
+            stars = [(15, 18), (35, 16), (58, 19), (85, 17), (110, 15), (25, 20), (95, 18)]
+            for sx, sy in stars:
+                # Make stars look pixelated
+                if 0 <= sx <= 126 and 0 <= sy <= 62:
+                    draw.point((sx, sy), fill="white")
+                    draw.point((sx+1, sy), fill="white")
+                    draw.point((sx, sy+1), fill="white")
+                    draw.point((sx+1, sy+1), fill="white")
             
-            # Palm fronds (simple lines radiating from top)
-            palm_top = (15, 40)
-            frond_points = [(5, 35), (10, 32), (20, 32), (25, 35), (12, 30), (18, 30)]
-            for point in frond_points:
-                draw.line([palm_top, point], fill="white")
-            
-            # Add some stars in the sky
-            stars = [(30, 18), (50, 16), (75, 19), (10, 17), (120, 16)]
-            for star in stars:
-                if 0 <= star[0] <= 127 and 0 <= star[1] <= 63:
-                    draw.point(star, fill="white")
+            # Draw ground line
+            draw.line([(0, 51), (127, 51)], fill="white")
             
             draw.text((90, 54), "Screen 3/3", fill="white")
     
