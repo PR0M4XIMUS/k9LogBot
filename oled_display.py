@@ -1,14 +1,13 @@
 # oled_display.py
 import threading
 import time
-import math
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from luma.oled.device import ssd1306
-from PIL import ImageFont
 import logging
+from config import DISPLAY_UPDATE_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +23,12 @@ class OLEDDisplayManager:
         self.display_thread = None
         self.current_screen = 0
         self.last_update = datetime.now()
+        # Performance optimization: configurable update interval
+        self.update_interval = DISPLAY_UPDATE_INTERVAL
+        # Notification management
+        self.notification_active = False
+        self.notification_end_time = None
+        self.notification_message = ""
         
         # Try to initialize display
         try:
@@ -58,16 +63,27 @@ class OLEDDisplayManager:
         """Main display loop that cycles through different screens."""
         while self.running:
             try:
-                if self.current_screen == 0:
-                    self._draw_status_screen()
-                elif self.current_screen == 1:
-                    self._draw_chisinau_time_screen()
-                elif self.current_screen == 2:
-                    self._draw_pixel_city_screen()
-                
-                # Cycle through screens every 5 seconds
-                time.sleep(5)
-                self.current_screen = (self.current_screen + 1) % 3
+                # Check if notification should be shown
+                if self.notification_active and datetime.now() < self.notification_end_time:
+                    self._draw_notification_screen()
+                elif self.notification_active:
+                    # Notification expired
+                    self.notification_active = False
+                    self.notification_message = ""
+                    self.notification_end_time = None
+                else:
+                    # Show normal screens
+                    if self.current_screen == 0:
+                        self._draw_status_screen()
+                    elif self.current_screen == 1:
+                        self._draw_chisinau_time_screen()
+                    elif self.current_screen == 2:
+                        self._draw_simple_info_screen()  # Simplified instead of complex pixel city
+                    
+                    # Only cycle screens when not showing notification
+                    # Performance optimization: longer sleep interval
+                    time.sleep(self.update_interval)
+                    self.current_screen = (self.current_screen + 1) % 3
                 
             except Exception as e:
                 logger.error(f"Error in display loop: {e}")
@@ -119,94 +135,54 @@ class OLEDDisplayManager:
             
             draw.text((90, 54), "Screen 2/3", fill="white")
     
-    def _draw_pixel_city_screen(self):
-        """Draw a nice pixel art city skyline screen."""
+    def _draw_simple_info_screen(self):
+        """Draw a simple information screen (performance optimized)."""
         with canvas(self.device) as draw:
             # Title
-            draw.text((0, 0), "PIXEL CITY", fill="white")
-            draw.text((0, 12), "=" * 14, fill="white")
+            draw.text((0, 0), "BOT INFO", fill="white")
+            draw.text((0, 12), "=" * 12, fill="white")
             
-            # Draw pixel art buildings with different heights
-            buildings = [
-                {"x": 5, "width": 8, "height": 25, "windows": [(1, 3), (5, 3), (1, 8), (5, 8)]},
-                {"x": 18, "width": 12, "height": 30, "windows": [(2, 5), (8, 5), (2, 12), (8, 12), (2, 18), (8, 18)]},
-                {"x": 35, "width": 6, "height": 20, "windows": [(1, 3), (4, 3), (1, 8)]},
-                {"x": 46, "width": 10, "height": 35, "windows": [(2, 4), (6, 4), (2, 12), (6, 12), (2, 20), (6, 20), (2, 28), (6, 28)]},
-                {"x": 61, "width": 8, "height": 22, "windows": [(1, 3), (5, 3), (1, 10), (5, 10)]},
-                {"x": 74, "width": 14, "height": 28, "windows": [(2, 4), (6, 4), (10, 4), (2, 12), (6, 12), (10, 12), (2, 20), (6, 20), (10, 20)]},
-                {"x": 93, "width": 7, "height": 18, "windows": [(1, 3), (4, 3), (1, 9)]},
-                {"x": 105, "width": 11, "height": 32, "windows": [(2, 4), (7, 4), (2, 12), (7, 12), (2, 20), (7, 20), (2, 28), (7, 28)]},
-                {"x": 121, "width": 6, "height": 15, "windows": [(1, 3), (4, 3)]}
-            ]
+            # Get stats for additional info
+            stats = self.get_stats_callback()
             
-            # Draw buildings
-            for building in buildings:
-                x, width, height = building["x"], building["width"], building["height"]
-                base_y = 50
-                # Draw building outline (pixelated style)
-                for i in range(0, width, 2):  # Pixelated edges
-                    for j in range(0, height, 2):
-                        px, py = x + i, base_y - j
-                        if 0 <= px <= 127 and 0 <= py <= 63:
-                            if i == 0 or i >= width-2 or j == 0 or j >= height-2:
-                                draw.point((px, py), fill="white")
-                
-                # Draw windows
-                for wx, wy in building["windows"]:
-                    window_x, window_y = x + wx, base_y - wy - 2
-                    if 0 <= window_x <= 126 and 0 <= window_y <= 62:
-                        # 2x2 pixel windows
-                        draw.point((window_x, window_y), fill="white")
-                        draw.point((window_x+1, window_y), fill="white")
-                        draw.point((window_x, window_y+1), fill="white")
-                        draw.point((window_x+1, window_y+1), fill="white")
-            
-            # Draw pixelated stars in the sky
-            stars = [(15, 18), (35, 16), (58, 19), (85, 17), (110, 15), (25, 20), (95, 18)]
-            for sx, sy in stars:
-                # Make stars look pixelated
-                if 0 <= sx <= 126 and 0 <= sy <= 62:
-                    draw.point((sx, sy), fill="white")
-                    draw.point((sx+1, sy), fill="white")
-                    draw.point((sx, sy+1), fill="white")
-                    draw.point((sx+1, sy+1), fill="white")
-            
-            # Draw ground line
-            draw.line([(0, 51), (127, 51)], fill="white")
+            # Show total walks and earnings
+            draw.text((0, 24), f"Total walks: {stats.get('total_walks', 0)}", fill="white")
+            draw.text((0, 36), f"Today: {stats.get('walks_today', 0)} walks", fill="white")
+            draw.text((0, 48), f"Balance: {stats.get('current_balance', 0):.1f} MDL", fill="white")
             
             draw.text((90, 54), "Screen 3/3", fill="white")
     
+    def _draw_notification_screen(self):
+        """Draw notification screen."""
+        with canvas(self.device) as draw:
+            draw.text((0, 0), "NOTIFICATION", fill="white")
+            draw.text((0, 12), "=" * 16, fill="white")
+            
+            # Word wrap for long messages
+            words = self.notification_message.split()
+            lines = []
+            current_line = ""
+            
+            for word in words:
+                if len(current_line + word) < 16:
+                    current_line += word + " "
+                else:
+                    lines.append(current_line.strip())
+                    current_line = word + " "
+            
+            if current_line:
+                lines.append(current_line.strip())
+            
+            # Display up to 3 lines
+            for i, line in enumerate(lines[:3]):
+                draw.text((0, 24 + i * 10), line, fill="white")
+    
     def show_notification(self, message, duration=3):
-        """Show a temporary notification."""
+        """Show a temporary notification (optimized to avoid thread creation)."""
         if self.device is None:
             return
         
-        def show_temp_message():
-            with canvas(self.device) as draw:
-                draw.text((0, 0), "NOTIFICATION", fill="white")
-                draw.text((0, 12), "=" * 16, fill="white")
-                
-                # Word wrap for long messages
-                words = message.split()
-                lines = []
-                current_line = ""
-                
-                for word in words:
-                    if len(current_line + word) < 16:
-                        current_line += word + " "
-                    else:
-                        lines.append(current_line.strip())
-                        current_line = word + " "
-                
-                if current_line:
-                    lines.append(current_line.strip())
-                
-                # Display up to 3 lines
-                for i, line in enumerate(lines[:3]):
-                    draw.text((0, 24 + i * 10), line, fill="white")
-            
-            time.sleep(duration)
-        
-        # Show notification in a separate thread
-        notification_thread = threading.Thread(target=show_temp_message, daemon=True)
-        notification_thread.start()
+        # Set notification state instead of creating new thread
+        self.notification_message = message
+        self.notification_active = True
+        self.notification_end_time = datetime.now() + timedelta(seconds=duration)

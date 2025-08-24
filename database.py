@@ -13,9 +13,17 @@ def ensure_data_directory():
         os.makedirs(data_dir)
 
 def get_db_connection():
-    """Get a database connection."""
+    """Get a database connection with performance optimizations."""
     ensure_data_directory()
-    return sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH)
+    
+    # Performance optimizations for SQLite
+    conn.execute('PRAGMA journal_mode=WAL')  # Write-Ahead Logging for better concurrency
+    conn.execute('PRAGMA synchronous=NORMAL')  # Balance between safety and performance
+    conn.execute('PRAGMA temp_store=MEMORY')  # Use memory for temp tables
+    conn.execute('PRAGMA mmap_size=268435456')  # 256MB memory map
+    
+    return conn
 
 def init_db():
     """Initialize the database with required tables."""
@@ -46,6 +54,20 @@ def init_db():
         cursor.execute('SELECT COUNT(*) FROM balance')
         if cursor.fetchone()[0] == 0:
             cursor.execute('INSERT INTO balance (id, current_balance) VALUES (1, 0.0)')
+        
+        # Create indexes for better query performance
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transaction_type 
+            ON transactions(transaction_type)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_timestamp 
+            ON transactions(timestamp)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_type_timestamp 
+            ON transactions(transaction_type, timestamp)
+        ''')
         
         conn.commit()
 
@@ -159,3 +181,34 @@ def get_all_transactions_for_report():
             ORDER BY timestamp DESC
         ''')
         return cursor.fetchall()
+
+def get_stats_summary():
+    """Get optimized statistics summary without loading all transactions."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        
+        # Get total walk count and earnings
+        cursor.execute('''
+            SELECT COUNT(*), COALESCE(SUM(amount), 0)
+            FROM transactions 
+            WHERE transaction_type = 'walk'
+        ''')
+        walk_data = cursor.fetchone()
+        total_walks = walk_data[0] if walk_data[0] else 0
+        total_earned = walk_data[1] if walk_data[1] else 0.0
+        
+        # Get walks today
+        cursor.execute('''
+            SELECT COUNT(*)
+            FROM transactions 
+            WHERE transaction_type = 'walk' 
+            AND date(timestamp) = date('now', 'localtime')
+        ''')
+        walks_today_result = cursor.fetchone()
+        walks_today = walks_today_result[0] if walks_today_result else 0
+        
+        return {
+            'total_walks': total_walks,
+            'total_earned': total_earned,
+            'walks_today': walks_today
+        }

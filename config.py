@@ -17,6 +17,12 @@ except (ValueError, TypeError):
 # --- Admin support ---
 ADMIN_CHAT_IDS = [864342269]  # You can add more admin IDs here if needed
 
+# --- Performance Configuration ---
+# OLED display update interval (seconds) - higher values reduce CPU usage
+DISPLAY_UPDATE_INTERVAL = int(os.getenv("DISPLAY_UPDATE_INTERVAL", "10"))
+# Stats cache duration (seconds) - higher values reduce database queries
+STATS_CACHE_DURATION = int(os.getenv("STATS_CACHE_DURATION", "30"))
+
 def is_admin(chat_id):
     return chat_id in ADMIN_CHAT_IDS
 
