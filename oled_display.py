@@ -1,7 +1,9 @@
 # oled_display.py
 import threading
 import time
+import math
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from luma.oled.device import ssd1306
@@ -59,15 +61,13 @@ class OLEDDisplayManager:
                 if self.current_screen == 0:
                     self._draw_status_screen()
                 elif self.current_screen == 1:
-                    self._draw_balance_screen()
+                    self._draw_chisinau_time_screen()
                 elif self.current_screen == 2:
-                    self._draw_stats_screen()
-                elif self.current_screen == 3:
-                    self._draw_time_screen()
+                    self._draw_retro_sunset_screen()
                 
                 # Cycle through screens every 5 seconds
                 time.sleep(5)
-                self.current_screen = (self.current_screen + 1) % 4
+                self.current_screen = (self.current_screen + 1) % 3
                 
             except Exception as e:
                 logger.error(f"Error in display loop: {e}")
@@ -92,60 +92,17 @@ class OLEDDisplayManager:
             draw.text((0, 36), f"Uptime: {hours:02d}:{minutes:02d}", fill="white")
             
             # Screen indicator
-            draw.text((0, 54), "Screen 1/4", fill="white")
+            draw.text((90, 54), "Screen 1/3", fill="white")
     
-    def _draw_balance_screen(self):
-        """Draw current balance screen."""
+    def _draw_chisinau_time_screen(self):
+        """Draw time and date screen for Chisinau, Moldova."""
         with canvas(self.device) as draw:
-            stats = self.get_stats_callback()
-            balance = stats.get('current_balance', 0)
+            # Get current time in Chisinau timezone
+            chisinau_tz = ZoneInfo("Europe/Chisinau")
+            now = datetime.now(chisinau_tz)
             
             # Title
-            draw.text((0, 0), "CURRENT BALANCE", fill="white")
-            draw.text((0, 12), "=" * 16, fill="white")
-            
-            # Balance with large font
-            balance_text = f"{balance:.2f} MDL"
-            draw.text((0, 28), balance_text, fill="white")
-            
-            # Status
-            if balance > 0:
-                status = "They owe you"
-            elif balance < 0:
-                status = "You owe them"
-            else:
-                status = "All settled"
-            
-            draw.text((0, 42), status, fill="white")
-            draw.text((0, 54), "Screen 2/4", fill="white")
-    
-    def _draw_stats_screen(self):
-        """Draw statistics screen."""
-        with canvas(self.device) as draw:
-            stats = self.get_stats_callback()
-            
-            # Title
-            draw.text((0, 0), "STATISTICS", fill="white")
-            draw.text((0, 12), "=" * 16, fill="white")
-            
-            # Stats
-            total_walks = stats.get('total_walks', 0)
-            walks_today = stats.get('walks_today', 0)
-            total_earned = stats.get('total_earned', 0)
-            
-            draw.text((0, 24), f"Total Walks: {total_walks}", fill="white")
-            draw.text((0, 34), f"Today: {walks_today}", fill="white")
-            draw.text((0, 44), f"Earned: {total_earned:.0f} MDL", fill="white")
-            
-            draw.text((0, 54), "Screen 3/4", fill="white")
-    
-    def _draw_time_screen(self):
-        """Draw time and date screen."""
-        with canvas(self.device) as draw:
-            now = datetime.now()
-            
-            # Title
-            draw.text((0, 0), "DATE & TIME", fill="white")
+            draw.text((0, 0), "CHISINAU TIME", fill="white")
             draw.text((0, 12), "=" * 16, fill="white")
             
             # Date
@@ -160,7 +117,65 @@ class OLEDDisplayManager:
             day_str = now.strftime("%A")
             draw.text((0, 50), day_str, fill="white")
             
-            draw.text((90, 54), "Screen 4/4", fill="white")
+            draw.text((90, 54), "Screen 2/3", fill="white")
+    
+    def _draw_retro_sunset_screen(self):
+        """Draw a cute pixel art retro sunset screen."""
+        with canvas(self.device) as draw:
+            # Title
+            draw.text((0, 0), "RETRO SUNSET", fill="white")
+            draw.text((0, 12), "=" * 14, fill="white")
+            
+            # Draw sky layers (horizontal lines for gradient effect)
+            for y in range(15, 25):
+                draw.line([(0, y), (127, y)], fill="white")
+            
+            # Draw sun (circle in upper part)
+            sun_center_x, sun_center_y = 100, 20
+            sun_radius = 6
+            for angle in range(0, 360, 30):  # Draw sun as points in circle
+                x = sun_center_x + int(sun_radius * math.cos(math.radians(angle)))
+                y = sun_center_y + int(sun_radius * math.sin(math.radians(angle)))
+                if 0 <= x <= 127 and 0 <= y <= 63:
+                    draw.point((x, y), fill="white")
+            
+            # Draw sun center
+            for dx in range(-2, 3):
+                for dy in range(-2, 3):
+                    if abs(dx) + abs(dy) <= 2:
+                        x, y = sun_center_x + dx, sun_center_y + dy
+                        if 0 <= x <= 127 and 0 <= y <= 63:
+                            draw.point((x, y), fill="white")
+            
+            # Draw mountain/hills silhouette
+            mountain_points = [
+                (0, 35), (20, 30), (40, 25), (60, 30), (80, 28), (100, 32), (127, 35)
+            ]
+            for i in range(len(mountain_points) - 1):
+                draw.line([mountain_points[i], mountain_points[i + 1]], fill="white")
+            
+            # Fill area below mountains
+            for y in range(36, 50):
+                draw.line([(0, y), (127, y)], fill="white")
+            
+            # Draw stylized palm tree on the left
+            # Tree trunk
+            draw.line([(15, 40), (15, 48)], fill="white")
+            draw.line([(16, 40), (16, 48)], fill="white")
+            
+            # Palm fronds (simple lines radiating from top)
+            palm_top = (15, 40)
+            frond_points = [(5, 35), (10, 32), (20, 32), (25, 35), (12, 30), (18, 30)]
+            for point in frond_points:
+                draw.line([palm_top, point], fill="white")
+            
+            # Add some stars in the sky
+            stars = [(30, 18), (50, 16), (75, 19), (10, 17), (120, 16)]
+            for star in stars:
+                if 0 <= star[0] <= 127 and 0 <= star[1] <= 63:
+                    draw.point(star, fill="white")
+            
+            draw.text((90, 54), "Screen 3/3", fill="white")
     
     def show_notification(self, message, duration=3):
         """Show a temporary notification."""
