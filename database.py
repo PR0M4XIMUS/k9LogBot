@@ -176,11 +176,105 @@ def get_all_transactions_for_report():
     with get_db_connection() as conn:
         cursor = conn.cursor()
         cursor.execute('''
-            SELECT timestamp, amount, transaction_type, description 
-            FROM transactions 
+            SELECT timestamp, amount, transaction_type, description
+            FROM transactions
             ORDER BY timestamp DESC
         ''')
         return cursor.fetchall()
+
+def get_transactions_with_ids(limit=None):
+    """Get transactions with their IDs for individual deletion feature.
+    
+    Args:
+        limit: Optional limit on number of transactions to return (for pagination)
+    
+    Returns:
+        List of tuples: (id, timestamp, amount, transaction_type, description)
+    """
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        if limit:
+            cursor.execute('''
+                SELECT id, timestamp, amount, transaction_type, description
+                FROM transactions
+                ORDER BY timestamp DESC
+                LIMIT ?
+            ''', (limit,))
+        else:
+            cursor.execute('''
+                SELECT id, timestamp, amount, transaction_type, description
+                FROM transactions
+                ORDER BY timestamp DESC
+            ''')
+        return cursor.fetchall()
+
+def delete_transaction_by_id(transaction_id):
+    """Delete a single transaction by its ID and adjust balance accordingly.
+    
+    Args:
+        transaction_id: The ID of the transaction to delete
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "amount": float (the amount that was deleted),
+            "transaction_type": str,
+            "error": str or None
+        }
+    """
+    result = {
+        "success": False,
+        "amount": 0.0,
+        "transaction_type": None,
+        "error": None
+    }
+    
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Get the transaction details first
+            cursor.execute('''
+                SELECT amount, transaction_type FROM transactions WHERE id = ?
+            ''', (transaction_id,))
+            row = cursor.fetchone()
+            
+            if not row:
+                result["error"] = "Transaction not found"
+                return result
+            
+            amount, transaction_type = row
+            
+            # Adjust balance based on transaction type
+            if transaction_type == 'walk':
+                # Remove walk amount from balance
+                cursor.execute('UPDATE balance SET current_balance = current_balance - ? WHERE id = 1', (amount,))
+            elif transaction_type in ('payment', 'credit_given'):
+                # These were negative, so we add back to balance
+                cursor.execute('UPDATE balance SET current_balance = current_balance + ? WHERE id = 1', (abs(amount),))
+            elif transaction_type == 'initial_balance':
+                # Remove initial balance from balance
+                cursor.execute('UPDATE balance SET current_balance = current_balance - ? WHERE id = 1', (amount,))
+            
+            # Delete the transaction
+            cursor.execute('DELETE FROM transactions WHERE id = ?', (transaction_id,))
+            conn.commit()
+            
+            result["success"] = True
+            result["amount"] = amount
+            result["transaction_type"] = transaction_type
+            return result
+            
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+def get_transaction_count():
+    """Get total count of transactions."""
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('SELECT COUNT(*) FROM transactions')
+        return cursor.fetchone()[0]
 
 def get_stats_summary():
     """Get optimized statistics summary without loading all transactions."""

@@ -142,10 +142,10 @@ def get_recent_entries(count=10):
 def clean_specific_entries(entry_ids):
     """
     Remove specific transactions by their IDs.
-    
+
     Args:
         entry_ids: List of transaction IDs to delete
-        
+
     Returns:
         dict: {
             "success": bool,
@@ -158,28 +158,89 @@ def clean_specific_entries(entry_ids):
         "deleted_count": 0,
         "error": None
     }
-    
+
     if not entry_ids:
         result["error"] = "No entries specified for deletion"
         return result
-        
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+
+        # Create placeholders for the IN clause
+        placeholders = ','.join(['?'] * len(entry_ids))
+
+        # Get count before delete
+        c.execute(f"SELECT COUNT(*) FROM transactions WHERE id IN ({placeholders})", entry_ids)
+        count_before = c.fetchone()[0]
+
+        # Delete the entries
+        c.execute(f"DELETE FROM transactions WHERE id IN ({placeholders})", entry_ids)
+        conn.commit()
+
+        result["success"] = True
+        result["deleted_count"] = count_before
+        conn.close()
+        return result
+
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
+def delete_single_transaction(transaction_id):
+    """
+    Delete a single transaction by ID and adjust balance accordingly.
+    
+    Args:
+        transaction_id: The ID of the transaction to delete
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "amount": float,
+            "transaction_type": str,
+            "error": str or None
+        }
+    """
+    result = {
+        "success": False,
+        "amount": 0.0,
+        "transaction_type": None,
+        "error": None
+    }
+    
     try:
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         
-        # Create placeholders for the IN clause
-        placeholders = ','.join(['?'] * len(entry_ids))
+        # Get the transaction details first
+        c.execute('SELECT amount, type FROM transactions WHERE id = ?', (transaction_id,))
+        row = c.fetchone()
         
-        # Get count before delete
-        c.execute(f"SELECT COUNT(*) FROM transactions WHERE id IN ({placeholders})", entry_ids)
-        count_before = c.fetchone()[0]
+        if not row:
+            result["error"] = "Transaction not found"
+            return result
         
-        # Delete the entries
-        c.execute(f"DELETE FROM transactions WHERE id IN ({placeholders})", entry_ids)
+        amount, transaction_type = row
+        
+        # Adjust balance based on transaction type
+        if transaction_type == 'walk':
+            # Remove walk amount from balance
+            c.execute('UPDATE balance SET current_balance = current_balance - ? WHERE id = 1', (amount,))
+        elif transaction_type in ('payment', 'credit_given'):
+            # These were negative, so we add back to balance
+            c.execute('UPDATE balance SET current_balance = current_balance + ? WHERE id = 1', (abs(amount),))
+        elif transaction_type == 'initial_balance':
+            # Remove initial balance from balance
+            c.execute('UPDATE balance SET current_balance = current_balance - ? WHERE id = 1', (amount,))
+        
+        # Delete the transaction
+        c.execute('DELETE FROM transactions WHERE id = ?', (transaction_id,))
         conn.commit()
         
         result["success"] = True
-        result["deleted_count"] = count_before
+        result["amount"] = amount
+        result["transaction_type"] = transaction_type
         conn.close()
         return result
         

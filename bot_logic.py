@@ -11,7 +11,8 @@ from datetime import datetime
 from database import (
     init_db, add_walk, get_current_balance,
     set_initial_balance, record_payment, record_credit_given,
-    get_weekly_report_data, get_all_transactions_for_report
+    get_weekly_report_data, get_all_transactions_for_report,
+    get_transactions_with_ids, delete_transaction_by_id, get_transaction_count
 )
 from config import YOUR_TELEGRAM_CHAT_ID, is_admin, ADMIN_CHAT_IDS
 from report_cleanup import clean_detailed_report, get_report_entries, get_recent_entries, clean_specific_entries
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 ASK_CREDIT_AMOUNT, RECEIVE_CREDIT_AMOUNT = range(2)
 ASK_CASHOUT_TYPE, ASK_MANUAL_CASHOUT_AMOUNT, RECEIVE_MANUAL_CASHOUT_AMOUNT = range(3)
 ASK_CLEANUP_OPTION, ASK_CLEANUP_START_DATE, ASK_CLEANUP_END_DATE, CONFIRM_CLEANUP = range(4)
+CONFIRM_SINGLE_DELETE = range(5, 6)
 
 # Keyboard Definitions (Admin gets cleanup button)
 def get_main_keyboard(chat_id):
@@ -152,33 +154,153 @@ async def cashout_cancel(update, context):
     await update.message.reply_text('Operation "Cash Out" cancelled.', reply_markup=get_main_keyboard(update.effective_chat.id))
     return ConversationHandler.END
 
-# --- Enhanced Detailed Report Command ---
+# --- Enhanced Detailed Report Command with Visual Improvements ---
 async def detailed_report_command(update, context):
+    """Enhanced detailed report with better visual presentation and individual delete options."""
     chat_id = update.effective_chat.id
-    transactions = get_all_transactions_for_report()
-    walk_count = len([t for t in transactions if t[2] == 'walk'])
-    walk_total_amount = sum([t[1] for t in transactions if t[2] == 'walk'])
-    current_balance = get_current_balance()
-    total_payment_credit_amount = sum([t[1] for t in transactions if t[2] in ('credit', 'payment')])
-    walks = [t for t in transactions if t[2] == 'walk']
-    walk_details = "\n".join([f"{t[0][:10]} - {t[1]:.2f} MDL" for t in walks]) or "No walks recorded."
-
-    report_message = (
-        f"*Detailed Report ({datetime.now().strftime('%Y-%m-%d')})*\n\n"
-        f"Walks completed: *{walk_count}*\n"
-        f"Total amount earned from walks: *{walk_total_amount:.2f} MDL*\n"
-        f"Current outstanding balance: *{current_balance:.2f} MDL*\n"
-        f"Total payments/credits received: *{total_payment_credit_amount:.2f} MDL*\n\n"
-        f"*Walks:*\n{walk_details}"
-    )
-    await update.message.reply_text(report_message, parse_mode=ParseMode.MARKDOWN, reply_markup=get_main_keyboard(chat_id))
-    if is_admin(chat_id):
-        keyboard = [
-            [InlineKeyboardButton("🗑️ Cleanup Detailed Report", callback_data="cleanup_start")],
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+    admin_mode = is_admin(chat_id)
+    
+    # Get transactions with IDs for individual deletion
+    transactions = get_transactions_with_ids(limit=20)  # Show last 20 transactions
+    total_count = get_transaction_count()
+    
+    if not transactions:
         await update.message.reply_text(
-            "Admin: You can clean up the detailed report for a date range.",
+            "📊 *No Transactions Yet*\n\n"
+            "No walks or transactions recorded yet.\n"
+            "Start by adding a walk! 🐕",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard(chat_id)
+        )
+        return
+    
+    # Calculate statistics
+    current_balance = get_current_balance()
+    
+    walks = [t for t in transactions if t[3] == 'walk']
+    payments = [t for t in transactions if t[3] == 'payment']
+    credits = [t for t in transactions if t[3] == 'credit_given']
+    
+    walk_count = len(walks)
+    walk_total = sum([t[2] for t in walks])
+    payment_total = sum([abs(t[2]) for t in payments])
+    credit_total = sum([abs(t[2]) for t in credits])
+    
+    # Build enhanced report message
+    report_text = "📊 *Detailed Activity Report*\n"
+    report_text += f"📅 _Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}_\n\n"
+    
+    # Summary section with better formatting
+    report_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    report_text += "💰 *BALANCE OVERVIEW*\n"
+    report_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    report_text += f"Current Balance: *{current_balance:.2f} MDL*\n\n"
+    
+    report_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    report_text += "📈 *STATISTICS*\n"
+    report_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    report_text += f"🐕 Walks (shown): *{walk_count}*\n"
+    report_text += f"💵 Earned (shown): *{walk_total:.2f} MDL*\n"
+    if payments:
+        report_text += f"💸 Payments (shown): *{payment_total:.2f} MDL*\n"
+    if credits:
+        report_text += f"💳 Credits (shown): *{credit_total:.2f} MDL*\n"
+    report_text += f"\n📋 Total records in DB: *{total_count}*\n"
+    
+    # Recent transactions section
+    report_text += "\n━━━━━━━━━━━━━━━━━━━━━━\n"
+    report_text += "📝 *RECENT TRANSACTIONS*\n"
+    report_text += "━━━━━━━━━━━━━━━━━━━━━━\n"
+    
+    # Format each transaction with emoji based on type
+    transaction_lines = []
+    for t in transactions[:15]:  # Show 15 most recent in summary
+        tid, timestamp, amount, ttype, description = t
+        date_str = timestamp[:16].replace('T', ' ')  # Format: YYYY-MM-DD HH:MM
+        
+        if ttype == 'walk':
+            emoji = "🐕"
+            sign = "+"
+            display_type = "Walk"
+        elif ttype == 'payment':
+            emoji = "💸"
+            sign = "-"
+            display_type = "Payout"
+            amount = abs(amount)
+        elif ttype == 'credit_given':
+            emoji = "💳"
+            sign = "-"
+            display_type = "Credit"
+            amount = abs(amount)
+        elif ttype == 'initial_balance':
+            emoji = "💰"
+            sign = "+"
+            display_type = "Initial"
+        else:
+            emoji = "📝"
+            sign = "+"
+            display_type = ttype.title()
+        
+        transaction_lines.append(
+            f"{emoji} `{tid}` | {date_str} | {sign}{amount:.2f} MDL ({display_type})"
+        )
+    
+    report_text += "\n".join(transaction_lines)
+    
+    if len(transactions) > 15:
+        report_text += f"\n_... and {len(transactions) - 15} more transactions_"
+    
+    # Send the main report
+    await update.message.reply_text(
+        report_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_keyboard(chat_id)
+    )
+    
+    # For admin: Show inline keyboard with individual delete options
+    if admin_mode:
+        # Create inline keyboard for individual deletions
+        keyboard = []
+        
+        # Show delete buttons for last 10 transactions
+        for t in transactions[:10]:
+            tid, timestamp, amount, ttype, description = t
+            date_str = timestamp[:10]
+            
+            if ttype == 'walk':
+                label = f"🐕 #{tid} {amount:.0f} MDL"
+            elif ttype == 'payment':
+                label = f"💸 #{tid} {abs(amount):.0f} MDL"
+            elif ttype == 'credit_given':
+                label = f"💳 #{tid} {abs(amount):.0f} MDL"
+            else:
+                label = f"📝 #{tid}"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    label,
+                    callback_data=f"del_single_{tid}"
+                )
+            ])
+        
+        # Add pagination/info buttons if there are more transactions
+        if len(transactions) > 10:
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"📋 Show More ({total_count} total)",
+                    callback_data="show_more_transactions"
+                )
+            ])
+        
+        keyboard.append([InlineKeyboardButton("❌ Close", callback_data="close_report")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "🔧 *Admin: Delete Individual Records*\n\n"
+            "Tap any transaction above to delete it.\n"
+            "_Balance will be adjusted automatically._",
+            parse_mode=ParseMode.MARKDOWN,
             reply_markup=reply_markup
         )
 
@@ -654,6 +776,215 @@ async def receive_initial_balance(update, context):
     finally:
         context.user_data["await_initial_balance"] = False
 
+# --- Individual Transaction Deletion Handlers (Admin Only) ---
+async def delete_single_transaction_callback(update, context):
+    """Handle individual transaction deletion requests from admin."""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    if not is_admin(chat_id):
+        await query.answer("⛔ Access denied. Admin only.", show_alert=True)
+        return
+    
+    # Extract transaction ID from callback data
+    callback_data = query.data
+    if not callback_data.startswith("del_single_"):
+        return
+    
+    try:
+        transaction_id = int(callback_data.replace("del_single_", ""))
+    except ValueError:
+        await query.answer("❌ Invalid transaction ID", show_alert=True)
+        return
+    
+    # Store in context for confirmation
+    context.user_data["delete_transaction_id"] = transaction_id
+    
+    # Get transaction details for confirmation message
+    transactions = get_transactions_with_ids(limit=100)
+    transaction = None
+    for t in transactions:
+        if t[0] == transaction_id:
+            transaction = t
+            break
+    
+    if not transaction:
+        await query.answer("❌ Transaction not found", show_alert=True)
+        return
+    
+    tid, timestamp, amount, ttype, description = transaction
+    date_str = timestamp[:16].replace('T', ' ')
+    
+    if ttype == 'walk':
+        emoji = "🐕"
+        display_type = "Walk"
+    elif ttype == 'payment':
+        emoji = "💸"
+        display_type = "Payout"
+        amount = abs(amount)
+    elif ttype == 'credit_given':
+        emoji = "💳"
+        display_type = "Credit"
+        amount = abs(amount)
+    else:
+        emoji = "📝"
+        display_type = ttype.title()
+    
+    # Show confirmation keyboard
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Yes, Delete", callback_data=f"confirm_del_{transaction_id}"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel_del")
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        f"⚠️ *Confirm Deletion*\n\n"
+        f"{emoji} Transaction #{tid}\n"
+        f"📅 Date: {date_str}\n"
+        f"💰 Amount: {amount:.2f} MDL\n"
+        f"📝 Type: {display_type}\n\n"
+        f"_This will permanently delete the transaction and adjust the balance._",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=reply_markup
+    )
+
+async def confirm_delete_transaction_callback(update, context):
+    """Confirm and execute single transaction deletion."""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    if not is_admin(chat_id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+    
+    callback_data = query.data
+    if not callback_data.startswith("confirm_del_"):
+        return
+    
+    try:
+        transaction_id = int(callback_data.replace("confirm_del_", ""))
+    except ValueError:
+        await query.answer("❌ Invalid transaction ID", show_alert=True)
+        return
+    
+    # Perform deletion
+    result = delete_transaction_by_id(transaction_id)
+    
+    if result["success"]:
+        amount = result["amount"]
+        ttype = result["transaction_type"]
+        
+        if ttype == 'walk':
+            emoji = "🐕"
+        elif ttype == 'payment':
+            emoji = "💸"
+            amount = abs(amount)
+        elif ttype == 'credit_given':
+            emoji = "💳"
+            amount = abs(amount)
+        else:
+            emoji = "📝"
+        
+        # Show success message
+        await query.edit_message_text(
+            f"✅ *Transaction Deleted Successfully*\n\n"
+            f"{emoji} Removed: {amount:.2f} MDL\n"
+            f"💾 Balance adjusted automatically.\n\n"
+            f"_Use /report to see updated transactions._",
+            parse_mode=ParseMode.MARKDOWN
+        )
+        
+        # Update OLED display if available
+        if global_oled_display:
+            global_oled_display.show_notification(f"Deleted: {amount:.0f} MDL", 2)
+    else:
+        await query.edit_message_text(
+            f"❌ *Deletion Failed*\n\n"
+            f"Error: {result.get('error', 'Unknown error')}",
+            parse_mode=ParseMode.MARKDOWN
+        )
+
+async def cancel_delete_transaction_callback(update, context):
+    """Cancel single transaction deletion."""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    if not is_admin(chat_id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+    
+    # Clear stored transaction ID
+    if "delete_transaction_id" in context.user_data:
+        del context.user_data["delete_transaction_id"]
+    
+    await query.edit_message_text("❌ Deletion cancelled.")
+
+async def show_more_transactions_callback(update, context):
+    """Show more transactions with pagination."""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    if not is_admin(chat_id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+    
+    # Get more transactions (next batch)
+    offset = context.user_data.get("transaction_offset", 10)
+    transactions = get_transactions_with_ids(limit=10)
+    
+    if not transactions:
+        await query.answer("No more transactions", show_alert=True)
+        return
+    
+    # Build transaction list
+    transaction_lines = []
+    for t in transactions:
+        tid, timestamp, amount, ttype, description = t
+        date_str = timestamp[:10]
+        
+        if ttype == 'walk':
+            emoji = "🐕"
+            label = f"{emoji} #{tid} | {date_str} | +{amount:.2f} MDL"
+        elif ttype == 'payment':
+            emoji = "💸"
+            label = f"{emoji} #{tid} | {date_str} | -{abs(amount):.2f} MDL"
+        elif ttype == 'credit_given':
+            emoji = "💳"
+            label = f"{emoji} #{tid} | {date_str} | -{abs(amount):.2f} MDL"
+        else:
+            emoji = "📝"
+            label = f"{emoji} #{tid} | {date_str}"
+        
+        transaction_lines.append(
+            InlineKeyboardButton(label, callback_data=f"del_single_{tid}")
+        )
+    
+    # Create keyboard
+    keyboard = [[t] for t in transaction_lines]
+    keyboard.append([InlineKeyboardButton("❌ Close", callback_data="close_report")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "🔧 *More Transactions*\n\n"
+        "Tap any to delete it.",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=reply_markup
+    )
+
+async def close_report_callback(update, context):
+    """Close the report/transaction list."""
+    query = update.callback_query
+    chat_id = query.message.chat.id
+    
+    if not is_admin(chat_id):
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+    
+    await query.edit_message_text("📋 Report view closed.")
+
 # Global Error Handler
 async def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
@@ -727,6 +1058,28 @@ def setup_handlers(application, stats_manager=None, oled_display=None):
     application.add_handler(MessageHandler(
         filters.TEXT & filters.Regex(r"^\d+(\.\d+)?$"),
         receive_initial_balance
+    ))
+
+    # Individual Transaction Deletion Callback Handlers (Admin Only)
+    application.add_handler(CallbackQueryHandler(
+        delete_single_transaction_callback,
+        pattern="^del_single_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        confirm_delete_transaction_callback,
+        pattern="^confirm_del_"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        cancel_delete_transaction_callback,
+        pattern="^cancel_del$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        show_more_transactions_callback,
+        pattern="^show_more_transactions$"
+    ))
+    application.add_handler(CallbackQueryHandler(
+        close_report_callback,
+        pattern="^close_report$"
     ))
 
     application.add_error_handler(error)
