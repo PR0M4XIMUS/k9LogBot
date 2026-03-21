@@ -276,6 +276,78 @@ def get_transaction_count():
         cursor.execute('SELECT COUNT(*) FROM transactions')
         return cursor.fetchone()[0]
 
+def auto_cleanup_old_records(months_to_keep=1):
+    """
+    Automatically delete old transaction records without affecting balance.
+    This is for database maintenance only - keeps recent records for performance.
+    
+    Args:
+        months_to_keep: Number of months of records to keep (default: 1)
+                       Records older than this will be deleted.
+    
+    Returns:
+        dict: {
+            "success": bool,
+            "deleted_count": int,
+            "cutoff_date": str (the date before which records were deleted),
+            "error": str or None
+        }
+    """
+    result = {
+        "success": False,
+        "deleted_count": 0,
+        "cutoff_date": None,
+        "error": None
+    }
+    
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Calculate cutoff date (first day of previous month)
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            
+            # Go to first day of current month
+            first_day_current = today.replace(day=1)
+            # Go to first day of previous month
+            cutoff_date = first_day_current - timedelta(days=1)
+            cutoff_date = cutoff_date.replace(day=1)
+            
+            # For keeping N months, go back further
+            for _ in range(months_to_keep - 1):
+                # Go to previous month
+                if cutoff_date.month == 1:
+                    cutoff_date = cutoff_date.replace(year=cutoff_date.year - 1, month=12)
+                else:
+                    cutoff_date = cutoff_date.replace(month=cutoff_date.month - 1)
+            
+            cutoff_str = cutoff_date.strftime('%Y-%m-%d')
+            result["cutoff_date"] = cutoff_str
+            
+            # Get count of records to be deleted
+            cursor.execute('''
+                SELECT COUNT(*) FROM transactions 
+                WHERE date(timestamp) < ?
+            ''', (cutoff_str,))
+            count_before = cursor.fetchone()[0]
+            
+            # Delete old records (WITHOUT adjusting balance)
+            cursor.execute('''
+                DELETE FROM transactions 
+                WHERE date(timestamp) < ?
+            ''', (cutoff_str,))
+            
+            conn.commit()
+            
+            result["success"] = True
+            result["deleted_count"] = count_before
+            return result
+            
+    except Exception as e:
+        result["error"] = str(e)
+        return result
+
 def get_stats_summary():
     """Get optimized statistics summary without loading all transactions."""
     with get_db_connection() as conn:

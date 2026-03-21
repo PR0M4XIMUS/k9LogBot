@@ -1,13 +1,14 @@
 # main.py
 from telegram.ext import Application, ApplicationBuilder
+from telegram.constants import ParseMode
 from apscheduler.schedulers.background import BackgroundScheduler
 from datetime import datetime, timedelta
 import time
 import logging
 
 # Import configuration details and bot's logic functions
-from config import TELEGRAM_BOT_TOKEN, YOUR_TELEGRAM_CHAT_ID, STATS_CACHE_DURATION
-from database import init_db, get_current_balance, get_all_transactions_for_report, get_stats_summary
+from config import TELEGRAM_BOT_TOKEN, YOUR_TELEGRAM_CHAT_ID, STATS_CACHE_DURATION, AUTO_CLEANUP_DAY, AUTO_CLEANUP_MONTHS_TO_KEEP, AUTO_CLEANUP_ENABLED
+from database import init_db, get_current_balance, get_all_transactions_for_report, get_stats_summary, auto_cleanup_old_records
 from bot_logic import setup_handlers, send_scheduled_report, error
 from oled_display import OLEDDisplayManager
 
@@ -63,6 +64,58 @@ class BotStatsManager:
 # Global stats manager
 stats_manager = BotStatsManager()
 
+async def run_auto_cleanup(bot, months_to_keep=1):
+    """
+    Automatic monthly cleanup function.
+    Deletes old transaction records without affecting balance.
+    Sends notification to admin when cleanup is performed.
+    """
+    logger.info("Running automatic monthly cleanup...")
+    
+    try:
+        result = auto_cleanup_old_records(months_to_keep)
+        
+        if result["success"]:
+            deleted_count = result["deleted_count"]
+            cutoff_date = result["cutoff_date"]
+            
+            logger.info(f"Auto-cleanup completed: Deleted {deleted_count} records older than {cutoff_date}")
+            
+            # Send notification to admin
+            if YOUR_TELEGRAM_CHAT_ID:
+                notification = (
+                    f"🧹 *Auto-Cleanup Completed*\n\n"
+                    f"✅ Deleted {deleted_count} old records\n"
+                    f"📅 Records older than: {cutoff_date}\n"
+                    f"💾 Kept: Current month records\n"
+                    f"⚖️ Balance: Unchanged\n\n"
+                    f"_Automatic database maintenance_"
+                )
+                await bot.send_message(
+                    chat_id=YOUR_TELEGRAM_CHAT_ID,
+                    text=notification,
+                    parse_mode=ParseMode.MARKDOWN
+                )
+                logger.info("Sent auto-cleanup notification to admin")
+        else:
+            error_msg = result.get("error", "Unknown error")
+            logger.error(f"Auto-cleanup failed: {error_msg}")
+            
+            if YOUR_TELEGRAM_CHAT_ID:
+                await bot.send_message(
+                    chat_id=YOUR_TELEGRAM_CHAT_ID,
+                    text=f"❌ *Auto-Cleanup Failed*\n\nError: {error_msg}",
+                    parse_mode=ParseMode.MARKDOWN
+                )
+    except Exception as e:
+        logger.error(f"Auto-cleanup exception: {e}")
+        if YOUR_TELEGRAM_CHAT_ID:
+            await bot.send_message(
+                chat_id=YOUR_TELEGRAM_CHAT_ID,
+                text=f"❌ *Auto-Cleanup Error*\n\n{str(e)}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+
 def main():
     """
     This is the main function that starts the bot, scheduler, and OLED display.
@@ -107,6 +160,20 @@ def main():
         logger.info(f"Weekly report scheduled for Sundays at 20:00 to chat ID: {YOUR_TELEGRAM_CHAT_ID}")
     else:
         logger.warning("YOUR_TELEGRAM_CHAT_ID is not set. Weekly reports will not be sent.")
+
+    # Schedule automatic monthly cleanup (runs on specified day of each month)
+    if AUTO_CLEANUP_ENABLED:
+        scheduler.add_job(
+            run_auto_cleanup,
+            'cron',
+            day=AUTO_CLEANUP_DAY,
+            hour=3,
+            minute=0,
+            args=[application.bot, AUTO_CLEANUP_MONTHS_TO_KEEP]
+        )
+        logger.info(f"Auto-cleanup scheduled for day {AUTO_CLEANUP_DAY} of each month at 03:00 (keeping {AUTO_CLEANUP_MONTHS_TO_KEEP} month(s) of records)")
+    else:
+        logger.info("Auto-cleanup is disabled")
     
     scheduler.start()
     logger.info("Scheduler started.")
