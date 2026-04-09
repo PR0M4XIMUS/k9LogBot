@@ -4,7 +4,7 @@ import sqlite3
 from datetime import datetime
 import os
 
-DB_PATH = os.getenv("DB_PATH", "k9logbot.sqlite")  # Use your actual DB filename
+from database import DB_PATH
 
 def validate_date(date_text):
     """Validates that the date string is in YYYY-MM-DD format."""
@@ -41,14 +41,14 @@ def clean_detailed_report(from_date, to_date):
         c = conn.cursor()
         # Get count before delete
         c.execute(
-            "SELECT COUNT(*) FROM transactions WHERE DATE(date) >= ? AND DATE(date) <= ?",
+            "SELECT COUNT(*) FROM transactions WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?",
             (from_date, to_date)
         )
         count_before = c.fetchone()[0]
 
         # Delete
         c.execute(
-            "DELETE FROM transactions WHERE DATE(date) >= ? AND DATE(date) <= ?",
+            "DELETE FROM transactions WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ?",
             (from_date, to_date)
         )
         conn.commit()
@@ -71,7 +71,7 @@ def get_report_entries(from_date, to_date):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
-            "SELECT date, amount, type, description FROM transactions WHERE DATE(date) >= ? AND DATE(date) <= ? ORDER BY date ASC",
+            "SELECT timestamp, amount, transaction_type, description FROM transactions WHERE DATE(timestamp) >= ? AND DATE(timestamp) <= ? ORDER BY timestamp ASC",
             (from_date, to_date)
         )
         rows = c.fetchall()
@@ -123,14 +123,14 @@ def get_recent_entries(count=10):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
         c.execute(
-            "SELECT id, date, amount, type, description FROM transactions ORDER BY date DESC, id DESC LIMIT ?",
+            "SELECT id, timestamp, amount, transaction_type, description FROM transactions ORDER BY timestamp DESC, id DESC LIMIT ?",
             (count,)
         )
         rows = c.fetchall()
         conn.close()
         return [
             {
-                "id": row[0], "date": row[1], "amount": row[2], 
+                "id": row[0], "date": row[1], "amount": row[2],
                 "type": row[3], "description": row[4]
             }
             for row in rows
@@ -214,7 +214,7 @@ def delete_single_transaction(transaction_id):
         c = conn.cursor()
         
         # Get the transaction details first
-        c.execute('SELECT amount, type FROM transactions WHERE id = ?', (transaction_id,))
+        c.execute('SELECT amount, transaction_type FROM transactions WHERE id = ?', (transaction_id,))
         row = c.fetchone()
         
         if not row:

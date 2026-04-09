@@ -54,7 +54,7 @@ class OLEDDisplayManager:
         """Stop the display update thread."""
         self.running = False
         if self.display_thread:
-            self.display_thread.join()
+            self.display_thread.join(timeout=self.update_interval + 1)
         if self.device:
             self.device.cleanup()
         logger.info("OLED display stopped")

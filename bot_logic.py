@@ -8,11 +8,18 @@ from telegram import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, 
 import logging
 from datetime import datetime
 
+import csv
+import io
+import re
+
 from database import (
     init_db, add_walk, get_current_balance,
     set_initial_balance, record_payment, record_credit_given,
     get_weekly_report_data, get_all_transactions_for_report,
-    get_transactions_with_ids, delete_transaction_by_id, get_transaction_count
+    get_transactions_with_ids, delete_transaction_by_id, get_transaction_count,
+    get_walk_rate, set_walk_rate, register_user, get_all_user_ids,
+    get_streak, get_walks_this_week, get_weekly_goal, set_weekly_goal,
+    get_user_reminder, set_user_reminder, get_earnings_forecast, update_walk_note,
 )
 from config import YOUR_TELEGRAM_CHAT_ID, is_admin, ADMIN_CHAT_IDS
 from report_cleanup import clean_detailed_report, get_report_entries, get_recent_entries, clean_specific_entries
@@ -26,7 +33,10 @@ logger = logging.getLogger(__name__)
 ASK_CREDIT_AMOUNT, RECEIVE_CREDIT_AMOUNT = range(2)
 ASK_CASHOUT_TYPE, ASK_MANUAL_CASHOUT_AMOUNT, RECEIVE_MANUAL_CASHOUT_AMOUNT = range(3)
 ASK_CLEANUP_OPTION, ASK_CLEANUP_START_DATE, ASK_CLEANUP_END_DATE, CONFIRM_CLEANUP = range(4)
-CONFIRM_SINGLE_DELETE = range(5, 6)
+CONFIRM_SINGLE_DELETE = 5
+ASK_WALK_NOTE = 10
+CONFIRM_UNDO = 11
+ASK_REMINDER_TIME = 12
 
 # Keyboard Definitions (Admin gets cleanup button)
 def get_main_keyboard(chat_id):
@@ -128,7 +138,7 @@ async def receive_manual_cashout_amount(update, context):
         global_stats_manager.record_activity()
     try:
         amount = float(update.message.text)
-        if amount == 0:
+        if amount <= 0:
             await update.message.reply_text("Amount must be greater than zero. Please try again.")
             return ASK_MANUAL_CASHOUT_AMOUNT
         record_payment(amount, f"Manual cash out of {amount:.2f} MDL")
@@ -355,9 +365,9 @@ async def cleanup_option_chosen(update, context):
         return ConversationHandler.END
     
     if query.data == "cleanup_cancel":
-        await query.edit_message_text("Cleanup cancelled.", reply_markup=get_main_keyboard(chat_id))
+        await query.edit_message_text("Cleanup cancelled.")
         return ConversationHandler.END
-    
+
     from datetime import datetime, timedelta
     today = datetime.now()
     
@@ -400,10 +410,7 @@ async def show_last_entries_preview(update, context, count):
         # Get last N transactions
         entries = get_recent_entries(count)
         if not entries:
-            await query.edit_message_text(
-                "No entries found to cleanup.",
-                reply_markup=get_main_keyboard(query.message.chat.id)
-            )
+            await query.edit_message_text("No entries found to cleanup.")
             return ConversationHandler.END
         
         # Format the preview
@@ -445,10 +452,7 @@ async def show_last_entries_preview(update, context, count):
         
     except Exception as e:
         logger.error(f"Error in show_last_entries_preview: {e}")
-        await query.edit_message_text(
-            f"Error retrieving entries: {str(e)}",
-            reply_markup=get_main_keyboard(query.message.chat.id)
-        )
+        await query.edit_message_text(f"Error retrieving entries: {str(e)}")
         return ConversationHandler.END
 
 async def show_cleanup_preview(update, context):
@@ -462,8 +466,7 @@ async def show_cleanup_preview(update, context):
         entries = get_report_entries(from_date, to_date)
         if not entries:
             await query.edit_message_text(
-                f"No entries found for {cleanup_type} ({from_date} to {to_date}).",
-                reply_markup=get_main_keyboard(query.message.chat.id)
+                f"No entries found for {cleanup_type} ({from_date} to {to_date})."
             )
             return ConversationHandler.END
         
@@ -520,10 +523,7 @@ async def show_cleanup_preview(update, context):
         
     except Exception as e:
         logger.error(f"Error in show_cleanup_preview: {e}")
-        await query.edit_message_text(
-            f"Error: {str(e)}",
-            reply_markup=get_main_keyboard(query.message.chat.id)
-        )
+        await query.edit_message_text(f"Error: {str(e)}")
         return ConversationHandler.END
 
 async def cleanup_get_start_date(update, context):
@@ -669,7 +669,7 @@ async def cleanup_confirm(update, context):
                 # Handle cleanup of specific entries (last N entries)
                 entries = context.user_data.get("cleanup_entries", [])
                 if not entries:
-                    await query.edit_message_text("No entries to delete.", reply_markup=get_main_keyboard(chat_id))
+                    await query.edit_message_text("No entries to delete.")
                     return ConversationHandler.END
                 
                 # Delete entries by ID (this will need a new function in report_cleanup.py)
@@ -679,13 +679,11 @@ async def cleanup_confirm(update, context):
                 
                 if result.get("success", False):
                     await query.edit_message_text(
-                        f"✅ Successfully deleted {deleted_count} entries (including {walks_deleted} walks).",
-                        reply_markup=get_main_keyboard(chat_id)
+                        f"✅ Successfully deleted {deleted_count} entries (including {walks_deleted} walks)."
                     )
                 else:
                     await query.edit_message_text(
-                        f"❌ Failed to delete entries: {result.get('error', 'Unknown error')}",
-                        reply_markup=get_main_keyboard(chat_id)
+                        f"❌ Failed to delete entries: {result.get('error', 'Unknown error')}"
                     )
             else:
                 # Handle date range cleanup
@@ -697,65 +695,99 @@ async def cleanup_confirm(update, context):
                 if result["success"]:
                     walk_count = context.user_data.get("cleanup_walk_count", 0)
                     total_entries = context.user_data.get("cleanup_total_entries", result["deleted_count"])
-                    
+
                     await query.edit_message_text(
                         f"✅ **{cleanup_type} Cleanup Complete**\n\n"
                         f"Deleted {total_entries} entries (including {walk_count} walks)\n"
                         f"Date range: {from_date} to {to_date}",
                         parse_mode=ParseMode.MARKDOWN,
-                        reply_markup=get_main_keyboard(chat_id)
                     )
                 else:
                     await query.edit_message_text(
-                        f"❌ **Cleanup Failed**\n\n{result['error']}", 
+                        f"❌ **Cleanup Failed**\n\n{result['error']}",
                         parse_mode=ParseMode.MARKDOWN,
-                        reply_markup=get_main_keyboard(chat_id)
                     )
                     
         except Exception as e:
             logger.error(f"Error in cleanup_confirm: {e}")
-            await query.edit_message_text(
-                f"❌ Cleanup failed: {str(e)}", 
-                reply_markup=get_main_keyboard(chat_id)
-            )
+            await query.edit_message_text(f"❌ Cleanup failed: {str(e)}")
     else:
-        await query.edit_message_text("Cleanup cancelled.", reply_markup=get_main_keyboard(chat_id))
+        await query.edit_message_text("Cleanup cancelled.")
     
     return ConversationHandler.END
 
 # --- Other Standard Commands ---
 async def start(update, context):
+    user = update.effective_user
+    register_user(user.id, user.username or user.first_name)
     await update.message.reply_text(
         "Welcome to k9LogBot! Use the buttons below or commands to interact.",
         reply_markup=get_main_keyboard(update.effective_chat.id)
     )
 
 async def help_command(update, context):
+    chat_id = update.effective_chat.id
+    admin_section = ""
+    if is_admin(chat_id):
+        admin_section = (
+            "\n*Admin Commands:*\n"
+            f"/setrate <amount> — Change walk rate (now {get_walk_rate():.0f} MDL)\n"
+            "/broadcast <msg> — Announce to all users\n"
+            "/export — Download transactions as CSV\n"
+        )
     await update.message.reply_text(
-        "Available commands:\n"
-        "/addwalk - Add a walk\n"
-        "/balance - Show current balance\n"
-        "/setinitial - Set initial balance\n"
-        "/report - Show detailed report\n"
+        "*Available Commands:*\n"
+        "/addwalk — Log a walk\n"
+        "/balance — Balance, streak & weekly progress\n"
+        "/setgoal <n> — Set weekly walk goal\n"
+        "/setinitial <amount> — Set starting balance\n"
+        "/report — Detailed transaction report\n"
+        "/undo — Undo last transaction\n"
+        "/reminder HH:MM — Set daily reminder\n"
+        "/reminder off — Disable reminder\n"
+        f"{admin_section}"
         "Or use the buttons below.",
-        reply_markup=get_main_keyboard(update.effective_chat.id)
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_keyboard(chat_id)
     )
 
 async def add_walk_command(update, context):
-    add_walk()
+    if global_stats_manager:
+        global_stats_manager.record_activity()
+    walk_id, rate = add_walk()
     current_balance = get_current_balance()
+    note_keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✏️ Add Note", callback_data=f"add_note_{walk_id}")]
+    ])
     await update.message.reply_text(
-        f"✅ Walk recorded. Current balance: *{current_balance:.2f} MDL*.",
+        f"✅ Walk recorded. +{rate:.0f} MDL\nBalance: *{current_balance:.2f} MDL*.",
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_main_keyboard(update.effective_chat.id)
+        reply_markup=note_keyboard
     )
 
 async def balance_command(update, context):
+    chat_id = update.effective_chat.id
     current_balance = get_current_balance()
+    streak = get_streak()
+    walks_week = get_walks_this_week()
+    goal = get_weekly_goal(chat_id)
+    forecast = get_earnings_forecast()
+
+    msg = f"💰 *Balance: {current_balance:.2f} MDL*\n\n"
+    if streak > 0:
+        msg += f"🔥 Streak: *{streak} day{'s' if streak != 1 else ''}*\n"
+    if goal > 0:
+        filled = min(walks_week, goal)
+        bar = "█" * filled + "░" * (goal - filled)
+        msg += f"🎯 This week: *{walks_week}/{goal}* `[{bar}]`\n"
+    else:
+        msg += f"🚶 This week: *{walks_week} walk{'s' if walks_week != 1 else ''}*\n"
+    msg += f"📈 Month forecast: *~{forecast:.0f} MDL*"
+
     await update.message.reply_text(
-        f"Current balance: *{current_balance:.2f} MDL*.",
+        msg,
         parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_main_keyboard(update.effective_chat.id)
+        reply_markup=get_main_keyboard(chat_id)
     )
 
 async def set_initial_balance_command(update, context):
@@ -763,6 +795,8 @@ async def set_initial_balance_command(update, context):
     context.user_data["await_initial_balance"] = True
 
 async def receive_initial_balance(update, context):
+    if not context.user_data.get("await_initial_balance"):
+        return
     try:
         amount = float(update.message.text)
         set_initial_balance(amount)
@@ -812,9 +846,9 @@ async def delete_single_transaction_callback(update, context):
         await query.answer("❌ Transaction not found", show_alert=True)
         return
     
-    tid, timestamp, amount, ttype, description = transaction
+    tid, timestamp, amount, ttype, description, *_ = transaction
     date_str = timestamp[:16].replace('T', ' ')
-    
+
     if ttype == 'walk':
         emoji = "🐕"
         display_type = "Walk"
@@ -829,7 +863,7 @@ async def delete_single_transaction_callback(update, context):
     else:
         emoji = "📝"
         display_type = ttype.title()
-    
+
     # Show confirmation keyboard
     keyboard = [
         [
@@ -932,7 +966,7 @@ async def show_more_transactions_callback(update, context):
     
     # Get more transactions (next batch)
     offset = context.user_data.get("transaction_offset", 10)
-    transactions = get_transactions_with_ids(limit=10)
+    transactions = get_transactions_with_ids(limit=10, offset=offset)
     
     if not transactions:
         await query.answer("No more transactions", show_alert=True)
@@ -941,7 +975,7 @@ async def show_more_transactions_callback(update, context):
     # Build transaction list
     transaction_lines = []
     for t in transactions:
-        tid, timestamp, amount, ttype, description = t
+        tid, timestamp, amount, ttype, description, *_ = t
         date_str = timestamp[:10]
         
         if ttype == 'walk':
@@ -961,6 +995,9 @@ async def show_more_transactions_callback(update, context):
             InlineKeyboardButton(label, callback_data=f"del_single_{tid}")
         )
     
+    # Advance the offset for the next "Show More" press
+    context.user_data["transaction_offset"] = offset + len(transactions)
+
     # Create keyboard
     keyboard = [[t] for t in transaction_lines]
     keyboard.append([InlineKeyboardButton("❌ Close", callback_data="close_report")])
@@ -984,6 +1021,225 @@ async def close_report_callback(update, context):
         return
     
     await query.edit_message_text("📋 Report view closed.")
+
+# --- New Feature Commands ---
+
+async def setrate_command(update, context):
+    """Admin: change the per-walk rate."""
+    if not is_admin(update.effective_chat.id):
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    if not context.args:
+        await update.message.reply_text(
+            f"Current walk rate: *{get_walk_rate():.2f} MDL*\nUsage: `/setrate <amount>`",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard(update.effective_chat.id)
+        )
+        return
+    try:
+        rate = float(context.args[0])
+        if rate <= 0:
+            await update.message.reply_text("Rate must be positive.")
+            return
+        set_walk_rate(rate)
+        await update.message.reply_text(
+            f"✅ Walk rate updated to *{rate:.2f} MDL* per walk.",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard(update.effective_chat.id)
+        )
+    except ValueError:
+        await update.message.reply_text("Invalid amount. Usage: `/setrate 80`", parse_mode=ParseMode.MARKDOWN)
+
+async def broadcast_command(update, context):
+    """Admin: send a message to all registered users."""
+    if not is_admin(update.effective_chat.id):
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: `/broadcast <message>`", parse_mode=ParseMode.MARKDOWN)
+        return
+    message = " ".join(context.args)
+    user_ids = get_all_user_ids()
+    if not user_ids:
+        await update.message.reply_text("No registered users yet.")
+        return
+    sent = failed = 0
+    for uid in user_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=uid,
+                text=f"📢 *Admin Announcement*\n\n{message}",
+                parse_mode=ParseMode.MARKDOWN
+            )
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(
+        f"📢 Broadcast complete.\n✅ Sent: {sent}\n❌ Failed: {failed}",
+        reply_markup=get_main_keyboard(update.effective_chat.id)
+    )
+
+async def undo_command(update, context):
+    """Show the last transaction with a confirmation button to delete it."""
+    transactions = get_transactions_with_ids(limit=1)
+    if not transactions:
+        await update.message.reply_text("No transactions to undo.")
+        return
+    tid, timestamp, amount, ttype, description, *_ = transactions[0]
+    date_str = timestamp[:16].replace('T', ' ')
+    emoji_map = {'walk': '🐕', 'payment': '💸', 'credit_given': '💳', 'initial_balance': '💰'}
+    emoji = emoji_map.get(ttype, '📝')
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✅ Yes, Undo", callback_data=f"undo_confirm_{tid}"),
+        InlineKeyboardButton("❌ Cancel", callback_data="undo_cancel")
+    ]])
+    await update.message.reply_text(
+        f"↩️ *Undo Last Transaction?*\n\n"
+        f"{emoji} #{tid} | {date_str}\n"
+        f"Amount: {abs(amount):.2f} MDL | Type: {ttype.replace('_', ' ').title()}\n\n"
+        f"_Balance will be adjusted automatically._",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard
+    )
+
+async def undo_callback(update, context):
+    query = update.callback_query
+    await query.answer()
+    if query.data == "undo_cancel":
+        await query.edit_message_text("↩️ Undo cancelled.")
+        return
+    tid = int(query.data.replace("undo_confirm_", ""))
+    result = delete_transaction_by_id(tid)
+    if result["success"]:
+        if global_stats_manager:
+            global_stats_manager.record_activity()
+        new_balance = get_current_balance()
+        await query.edit_message_text(
+            f"✅ *Transaction Undone*\n\nBalance: *{new_balance:.2f} MDL*",
+            parse_mode=ParseMode.MARKDOWN
+        )
+    else:
+        await query.edit_message_text(f"❌ Undo failed: {result.get('error', 'Unknown error')}")
+
+async def export_command(update, context):
+    """Admin: export all transactions as a CSV file."""
+    if not is_admin(update.effective_chat.id):
+        await update.message.reply_text("⛔ Admin only.")
+        return
+    transactions = get_all_transactions_for_report()
+    if not transactions:
+        await update.message.reply_text("No transactions to export.")
+        return
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Timestamp', 'Amount (MDL)', 'Type', 'Description', 'Notes'])
+    for row in transactions:
+        writer.writerow(row)
+    output.seek(0)
+    filename = f"k9logbot_{datetime.now().strftime('%Y%m%d')}.csv"
+    await update.message.reply_document(
+        document=io.BytesIO(output.getvalue().encode('utf-8')),
+        filename=filename,
+        caption=f"📊 Exported {len(transactions)} transactions",
+        reply_markup=get_main_keyboard(update.effective_chat.id)
+    )
+
+async def setgoal_command(update, context):
+    """Set or view the weekly walk goal."""
+    user_id = update.effective_chat.id
+    if not context.args:
+        goal = get_weekly_goal(user_id)
+        walks = get_walks_this_week()
+        if goal > 0:
+            await update.message.reply_text(
+                f"🎯 Weekly goal: *{goal} walks* | Progress: *{walks}/{goal}*\n"
+                "Use `/setgoal <n>` to change.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard(user_id)
+            )
+        else:
+            await update.message.reply_text(
+                "No goal set. Use `/setgoal <n>` to set a weekly target.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard(user_id)
+            )
+        return
+    try:
+        goal = int(context.args[0])
+        if goal <= 0:
+            await update.message.reply_text("Goal must be a positive number.")
+            return
+        set_weekly_goal(user_id, goal)
+        await update.message.reply_text(
+            f"🎯 Weekly goal set to *{goal} walks*!",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=get_main_keyboard(user_id)
+        )
+    except ValueError:
+        await update.message.reply_text("Invalid number. Usage: `/setgoal 10`", parse_mode=ParseMode.MARKDOWN)
+
+async def reminder_command(update, context):
+    """Set or disable a daily reminder if no walk has been logged."""
+    user_id = update.effective_chat.id
+    if not context.args:
+        current = get_user_reminder(user_id)
+        if current['enabled']:
+            await update.message.reply_text(
+                f"🔔 Reminder set for *{current['time']}*\nUse `/reminder off` to disable.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard(user_id)
+            )
+        else:
+            await update.message.reply_text(
+                "🔕 No reminder set.\nUsage: `/reminder 09:00`",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard(user_id)
+            )
+        return
+    arg = context.args[0].strip()
+    if arg.lower() == 'off':
+        set_user_reminder(user_id, None, False)
+        await update.message.reply_text("🔕 Daily reminder disabled.", reply_markup=get_main_keyboard(user_id))
+        return
+    if re.match(r'^\d{2}:\d{2}$', arg):
+        hour, minute = map(int, arg.split(':'))
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            set_user_reminder(user_id, arg, True)
+            await update.message.reply_text(
+                f"🔔 Reminder set for *{arg}* daily.\nYou'll be reminded if no walk is logged by then.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_main_keyboard(user_id)
+            )
+        else:
+            await update.message.reply_text("Invalid time. Use 00:00–23:59 format.")
+    else:
+        await update.message.reply_text("Usage: `/reminder 09:00` or `/reminder off`", parse_mode=ParseMode.MARKDOWN)
+
+# --- Walk Note Conversation ---
+
+async def add_note_start(update, context):
+    query = update.callback_query
+    await query.answer()
+    walk_id = int(query.data.replace("add_note_", ""))
+    context.user_data["note_walk_id"] = walk_id
+    await query.edit_message_text(f"📝 Enter a note for walk #{walk_id} (or /cancel to skip):")
+    return ASK_WALK_NOTE
+
+async def receive_walk_note(update, context):
+    note = update.message.text.strip()
+    walk_id = context.user_data.get("note_walk_id")
+    if walk_id:
+        update_walk_note(walk_id, note)
+    await update.message.reply_text(
+        f"✅ Note saved: _{note}_",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_keyboard(update.effective_chat.id)
+    )
+    return ConversationHandler.END
+
+async def note_cancel(update, context):
+    await update.message.reply_text("Note skipped.", reply_markup=get_main_keyboard(update.effective_chat.id))
+    return ConversationHandler.END
 
 # Global Error Handler
 async def error(update, context):
@@ -1081,6 +1337,28 @@ def setup_handlers(application, stats_manager=None, oled_display=None):
         close_report_callback,
         pattern="^close_report$"
     ))
+
+    # Walk note conversation
+    note_conv_handler = ConversationHandler(
+        entry_points=[CallbackQueryHandler(add_note_start, pattern=r"^add_note_\d+$")],
+        states={
+            ASK_WALK_NOTE: [MessageHandler(filters.TEXT & ~filters.COMMAND, receive_walk_note)],
+        },
+        fallbacks=[CommandHandler("cancel", note_cancel), MessageHandler(filters.COMMAND, note_cancel)],
+        allow_reentry=True
+    )
+    application.add_handler(note_conv_handler)
+
+    # New commands
+    application.add_handler(CommandHandler("setrate", setrate_command))
+    application.add_handler(CommandHandler("broadcast", broadcast_command))
+    application.add_handler(CommandHandler("undo", undo_command))
+    application.add_handler(CommandHandler("export", export_command))
+    application.add_handler(CommandHandler("setgoal", setgoal_command))
+    application.add_handler(CommandHandler("reminder", reminder_command))
+
+    # Undo callback
+    application.add_handler(CallbackQueryHandler(undo_callback, pattern=r"^undo_confirm_\d+$|^undo_cancel$"))
 
     application.add_error_handler(error)
 
