@@ -31,9 +31,12 @@
 
 ### 🚶‍♀️ Walk Tracking
 - **One-tap walk logging** - Record walks instantly with button press
-- **Automatic balance calculation** - Each walk adds 75 MDL to your balance
-- **Daily/Weekly statistics** - Track walking activity over time
-- **Detailed reports** - View comprehensive walk history with timestamps
+- **Configurable walk rate** - Admin can adjust per-walk payment (default 75 MDL)
+- **Walk notes** - Add context to each walk (distance, dog name, conditions, etc.)
+- **Automatic balance calculation** - Walk rate added to balance instantly
+- **Streak tracking** - Consecutive days of walks displayed in balance
+- **Daily/Weekly statistics** - Track activity with real-time progress
+- **Detailed reports** - View comprehensive walk history with timestamps and notes
 
 ### 💰 Payment Management
 - **Balance tracking** in MDL (Moldovan Leu)
@@ -42,11 +45,23 @@
 - **Transaction history** - Complete record of all payments and walks
 - **Individual transaction deletion** - Remove specific entries (admin only)
 
-### 📊 Smart Reporting
+### 📊 Smart Reporting & Analytics
 - **Real-time balance display** - Always know current earnings
+- **Streak tracking** - 🔥 Display consecutive days with walks
+- **Weekly goals** - 🎯 Set targets and see live progress bar
+- **Earnings forecast** - 📈 Monthly projection based on current pace
 - **Weekly automated reports** - Scheduled summary every Sunday at 20:00
 - **Enhanced visual reports** - Better formatting with emoji indicators
 - **Transaction preview** - See what will be deleted before confirming
+- **Daily reminders** - 🔔 Optional reminder if no walk logged by your chosen time
+
+### 👨‍💼 Admin Controls
+- **Configurable walk rate** - Change payment per walk via `/setrate`
+- **Broadcast messages** - Send announcements to all users
+- **CSV export** - Download full transaction history for analysis
+- **Individual transaction deletion** - Remove specific entries with balance auto-adjust
+- **Flexible cleanup** - Delete by date range, count, or presets
+- **User management** - Track registered users for broadcast
 
 ### 🗄️ Database Management
 - **Automatic monthly cleanup** - Scheduled database maintenance
@@ -57,38 +72,87 @@
 ### 🔧 Technical Excellence
 - **Docker containerized** - Easy deployment and updates
 - **Database persistence** - SQLite with WAL mode and optimizations
-- **Automated scheduling** - APScheduler for reports and cleanup
+- **Reliable scheduling** - Async JobQueue ensures reports and cleanup always run
 - **Error handling** - Robust error recovery and logging
 - **Multi-user support** - Individual tracking with admin controls
 - **Performance optimized** - Runs efficiently on all Raspberry Pi models
+- **Persistent settings** - User preferences and admin settings stored in database
 
 ---
 
 ## 🎉 What's New
 
-### Latest Features
+### Latest Features (v2.0)
+
+#### 🔹 Configurable Walk Rate (`/setrate`)
+Admins can change the per-walk price without editing code:
+- `/setrate 80` — New walks are worth 80 MDL
+- Persisted in database, applies immediately
+- Useful for seasonal adjustments or rate changes
+
+#### 🔹 Broadcast Messages (`/broadcast`)
+Send announcements to all registered users:
+- `/broadcast Important: New rate is 80 MDL per walk!`
+- Reaches everyone who has started the bot
+- Perfect for policy updates and notifications
+
+#### 📥 Export Transactions (`/export`)
+Download full transaction history as CSV:
+- Compatible with Excel, Google Sheets, databases
+- Includes timestamp, amount, type, description, and notes
+- Useful for bookkeeping and tax records
+
+#### 📝 Walk Notes
+Add context to each walk you log:
+- After `/addwalk`, tap **✏️ Add Note**
+- Type distance, dog name, conditions, or anything useful
+- Notes are searchable and visible in detailed reports
+
+#### 🔥 Streak Tracking
+Automatic motivation system:
+- Displays consecutive days of walks in `/balance`
+- Resets if you skip a day
+- Encourages consistent daily habits
+
+#### 🎯 Weekly Goals
+Set and track personal targets:
+- `/setgoal 10` — Aim for 10 walks per week
+- Visual progress bar in `/balance`
+- Update your goal anytime with `/setgoal <n>`
+
+#### 📈 Earnings Forecast
+Automatic month projection:
+- `📈 Month forecast: ~2,250 MDL` in `/balance`
+- Based on pace so far, projects month earnings
+- Updates daily as you walk
+
+#### 🔔 Daily Reminders
+Optional push notifications:
+- `/reminder 09:00` — Get reminded at 9 AM if no walk logged yet
+- `/reminder off` — Disable
+- Per-user setting; everyone chooses their own time
+
+#### ↩️ Undo (`/undo`)
+Quickly delete your last transaction:
+- Shows the last entry with confirmation
+- One-tap reversal if you made a mistake
+- Resets balance automatically
 
 #### 🔹 Individual Transaction Deletion
-Admins can now delete specific transactions directly from the detailed report using inline buttons. Balance is automatically adjusted.
+Admins can delete specific transactions directly from reports using inline buttons. Balance is automatically adjusted.
 
 #### 🔹 Enhanced Detailed Reports
 - Better visual formatting with emoji indicators
 - Transaction IDs displayed for easy reference
 - Summary statistics at the top
-- Preview of recent transactions
+- Notes displayed for each transaction
 
-#### 🔹 Automatic Monthly Cleanup
-Scheduled database maintenance runs on configurable day each month:
-- Removes old records without affecting balance
-- Sends notification to admin when completed
-- Configurable retention period (keep N months)
-
-#### 🔹 Improved Cleanup Options
-Multiple preset cleanup options for admins:
-- 📅 Last Week - Delete past 7 days
-- 📆 Last Month - Delete past 30 days
-- 📋 Last 10 Entries - Delete recent transactions
-- 🎯 Custom Date Range - Specify exact dates
+#### 🔹 Fixed Scheduled Jobs
+Weekly reports and monthly cleanup now run reliably:
+- Switched from broken BackgroundScheduler to async JobQueue
+- All background tasks guaranteed to execute
+- Weekly reports now arrive on time
+- Monthly cleanup completes as configured
 
 #### 🔹 Performance Optimizations
 - 95% fewer database queries with caching
@@ -212,14 +276,26 @@ docker-compose logs -f
 
 ### 📱 Available Commands
 
+#### User Commands
 | Command | Description | Example |
 |---------|-------------|---------|
 | `/start` | Initialize bot and show welcome message | `/start` |
 | `/help` | Display help with all available commands | `/help` |
-| `/addwalk` | Record a new walk (+75 MDL to balance) | `/addwalk` |
-| `/balance` | Show current balance | `/balance` |
+| `/addwalk` | Record a new walk | `/addwalk` |
+| `/balance` | Show balance, streak, weekly progress & forecast | `/balance` |
 | `/setinitial <amount>` | Set initial balance | `/setinitial 100` |
 | `/report` | Generate detailed activity report | `/report` |
+| `/undo` | Delete the last transaction | `/undo` |
+| `/setgoal <n>` | Set weekly walk goal | `/setgoal 10` |
+| `/reminder <HH:MM>` | Set daily reminder (or `/reminder off`) | `/reminder 09:00` |
+
+#### Admin Commands
+| Command | Description | Example |
+|---------|-------------|---------|
+| `/setrate <amount>` | Change the per-walk rate | `/setrate 80` |
+| `/broadcast <message>` | Send announcement to all users | `/broadcast Rate increased to 80 MDL` |
+| `/export` | Download all transactions as CSV | `/export` |
+| `/cleanup` | Access detailed cleanup options | `/cleanup` |
 
 ### 🎯 Interactive Buttons
 
@@ -249,18 +325,26 @@ The bot provides easy-to-use buttons for common actions:
 
 ### 📊 Reports and Analytics
 
-#### Balance Information
-- **Current Balance**: Shows your current earnings in MDL
-- **Total Walks**: Cumulative walk count
-- **Daily Stats**: Walks completed today
-- **Transaction History**: All credits and payments
+#### Balance Display (`/balance`)
+- **Current Balance**: Your total earnings in MDL
+- **Streak**: 🔥 Shows consecutive days with walks
+- **Weekly Progress**: 🎯 Visual progress bar toward your goal (if set)
+- **Month Forecast**: 📈 Projected earnings for the month based on current pace
+- **Weekly Walks**: Total walks this week
 
-#### Detailed Reports
+#### Detailed Reports (`/report`)
 - Complete transaction history with IDs
-- Walk timestamps and earnings
-- Payment/credit records
+- Walk timestamps, amounts, and notes
+- Payment/credit records with dates
 - Balance calculations
 - Individual delete buttons (admin only)
+
+### 📝 Walk Notes
+After logging a walk with `/addwalk` or **➕ Add Walk**:
+1. An **✏️ Add Note** button appears
+2. Tap it and type your note (e.g., "2 miles", "Dog name", "Special conditions")
+3. Note is saved to that transaction
+4. View notes in `/report` for detailed context
 
 ---
 
@@ -276,6 +360,34 @@ ADMIN_CHAT_IDS = [864342269]  # Add your chat ID here
 
 ### Admin-Only Features
 
+#### 🔹 Configurable Walk Rate (`/setrate`)
+Change the payment per walk without editing code:
+- `/setrate 80` — sets the rate to 80 MDL per walk
+- `/setrate` — displays the current rate
+- New rate applies to all walks logged going forward
+- Existing transactions are not affected
+- Rate is persisted in the database
+
+#### 📢 Broadcast Messages (`/broadcast`)
+Send announcements to all registered users:
+- `/broadcast New rate is now 80 MDL per walk!`
+- Useful for policy changes, scheduled downtime, or important updates
+- All users who've used `/start` will receive the message
+
+#### 📥 Export Transactions (`/export`)
+Download all transaction history as a CSV file:
+- `/export` — sends a timestamped CSV file
+- Useful for bookkeeping, tax records, or data analysis
+- File includes: timestamp, amount, type, description, and notes
+- Can open in Excel, Google Sheets, or any spreadsheet tool
+
+#### ↩️ Undo Last Transaction (`/undo`)
+Quickly delete the most recent transaction:
+- `/undo` — shows the last transaction with a confirmation button
+- Tap **✅ Yes, Undo** to delete, or **❌ Cancel** to keep it
+- Balance is automatically adjusted
+- Works for admins and users (everyone can undo their own mistakes)
+
 #### 🔹 Individual Transaction Deletion
 Delete specific transactions directly from the report:
 1. View **📊 Detailed Report**
@@ -283,7 +395,7 @@ Delete specific transactions directly from the report:
 3. Tap any transaction to delete it
 4. Balance is automatically adjusted
 
-#### 🗑️ Cleanup Reports
+#### 🗑️ Cleanup Reports (`/cleanup`)
 Clean up transaction history with multiple options:
 
 1. Click **🗑️ Cleanup Detailed Report** (admin button)
@@ -302,11 +414,39 @@ Scheduled cleanup runs automatically (configurable):
 - Sends notification when completed
 - Preserves balance while removing old records
 
-#### Advanced Management
-- View system statistics
-- Monitor bot performance
-- Access detailed logs
-- Bulk operations
+---
+
+## 🎯 User Features & Tracking
+
+### 🔥 Streak Tracking
+Monitor your consistency with consecutive-day streaks:
+- Automatically calculated based on daily walks
+- Displayed in `/balance` (e.g., "🔥 Streak: *7 days*")
+- Resets if you skip a day
+- Motivates daily walk habits
+
+### 🎯 Weekly Goals
+Set and track a personal weekly walk target:
+- `/setgoal 10` — Set a goal of 10 walks per week
+- `/balance` — Shows progress bar: `🎯 This week: *6/10* `[██████░░░░]``
+- `/setgoal` — View your current goal and progress
+- Visual progress bar updates as you log walks
+- Helps maintain consistency and accountability
+
+### 📈 Earnings Forecast
+Automatically projects your month earnings based on current pace:
+- Displayed in `/balance` (e.g., "📈 Month forecast: *~2,250 MDL*")
+- Calculated as: `(earnings so far / days elapsed) × total days in month`
+- Updates daily to reflect your walking pace
+- Useful for budgeting and planning
+
+### 🔔 Daily Reminders
+Get a reminder if you forget to log a walk:
+- `/reminder 09:00` — Set reminder for 9:00 AM
+- `/reminder off` — Disable reminders
+- `/reminder` — View your current reminder setting
+- Sends a message only if no walk has been logged by that time
+- Optional and per-user (each person sets their own time)
 
 ---
 
@@ -331,6 +471,15 @@ Database settings are automatically optimized:
 - Optimized PRAGMA settings
 - Automatic indexing on frequently queried columns
 
+### Runtime Settings
+
+User and admin settings are stored in the database:
+- **settings table**: Global settings like walk rate
+- **users table**: Tracks registered users for broadcast
+- **user_settings table**: Per-user goals, reminders, preferences
+- All settings persist across bot restarts
+- No configuration files needed — everything is configurable via commands
+
 ---
 
 ## 📈 Performance
@@ -347,6 +496,13 @@ K9LogBot is optimized for Raspberry Pi performance:
 - **Memory-mapped database** access
 - **Optimized threading** for concurrent operations
 - Runs efficiently on all Raspberry Pi models (Pi Zero to Pi 4)
+
+### Scheduled Jobs
+Reliable background tasks using python-telegram-bot's async JobQueue:
+- **Weekly report**: Every Sunday at 20:00 (configurable chat ID)
+- **Monthly cleanup**: Configurable day of month at 03:00
+- **Daily reminders**: Run every minute to check if reminders are due
+- All jobs are fully async and guaranteed to execute
 
 For detailed performance information, see [PERFORMANCE.md](PERFORMANCE.md).
 
