@@ -4,6 +4,7 @@ import logging
 
 from telegram.ext import ApplicationBuilder, CallbackContext
 from telegram.constants import ParseMode
+from telegram import MenuButtonCommands
 
 from config import (
     TELEGRAM_BOT_TOKEN, YOUR_TELEGRAM_CHAT_ID, STATS_CACHE_DURATION,
@@ -121,6 +122,18 @@ def main():
     oled_display.start()
 
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+
+    # Set menu button on startup
+    async def post_init(app):
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonCommands()
+            )
+            logger.info("Menu button set successfully")
+        except Exception as e:
+            logger.warning(f"Could not set menu button: {e}")
+
+    application.post_init = post_init
     setup_handlers(application, stats_manager, oled_display)
 
     job_queue = application.job_queue
