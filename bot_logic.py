@@ -58,7 +58,10 @@ def get_cashout_inline_keyboard(balance):
 # --- Conversation Handlers ---
 
 async def credit_start(update, context):
-    await update.message.reply_text("Please enter the credit amount (in MDL).")
+    await update.message.reply_text(
+        "Please enter the credit amount (in MDL).",
+        reply_markup=get_main_keyboard(update.effective_chat.id)
+    )
     return ASK_CREDIT_AMOUNT
 
 async def receive_credit_amount(update, context):
@@ -131,6 +134,10 @@ async def cashout_type_chosen(update, context):
         return ConversationHandler.END
     elif query.data == "cashout_manual":
         await query.edit_message_text("Please enter the amount to pay out (in MDL).")
+        await query.message.reply_text(
+            "👇 Enter amount below or use the menu:",
+            reply_markup=get_main_keyboard(query.message.chat.id)
+        )
         return ASK_MANUAL_CASHOUT_AMOUNT
 
 async def receive_manual_cashout_amount(update, context):
@@ -399,6 +406,10 @@ async def cleanup_option_chosen(update, context):
             "Type /cancel to exit.",
             reply_markup=None
         )
+        await query.message.reply_text(
+            "👇 Enter start date below or use the menu:",
+            reply_markup=get_main_keyboard(query.message.chat.id)
+        )
         context.user_data["cleanup_type"] = "Custom Range"
         return ASK_CLEANUP_START_DATE
 
@@ -543,7 +554,8 @@ async def cleanup_get_start_date(update, context):
             f"✅ Start date set: {date_text}\n\n"
             f"📅 Now enter END date for cleanup (YYYY-MM-DD):\n\n"
             f"Example: 2024-01-31\n"
-            f"Type /cancel to exit."
+            f"Type /cancel to exit.",
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
         return ASK_CLEANUP_END_DATE
         
@@ -552,7 +564,8 @@ async def cleanup_get_start_date(update, context):
             f"❌ Invalid date format: {str(e)}\n\n"
             f"Please enter date in YYYY-MM-DD format.\n"
             f"Example: 2024-01-15\n\n"
-            f"Type /cancel to exit."
+            f"Type /cancel to exit.",
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
         return ASK_CLEANUP_START_DATE
 
@@ -574,7 +587,8 @@ async def cleanup_get_end_date(update, context):
             await update.message.reply_text(
                 f"❌ End date ({date_text}) must be after start date ({context.user_data['cleanup_start_date']}).\n\n"
                 f"Please enter a valid END date (YYYY-MM-DD):\n"
-                f"Type /cancel to exit."
+                f"Type /cancel to exit.",
+                reply_markup=get_main_keyboard(update.effective_chat.id)
             )
             return ASK_CLEANUP_END_DATE
         
@@ -586,7 +600,8 @@ async def cleanup_get_end_date(update, context):
             f"❌ Invalid date format: {str(e)}\n\n"
             f"Please enter date in YYYY-MM-DD format.\n"
             f"Example: 2024-01-31\n\n"
-            f"Type /cancel to exit."
+            f"Type /cancel to exit.",
+            reply_markup=get_main_keyboard(update.effective_chat.id)
         )
         return ASK_CLEANUP_END_DATE
 
@@ -791,7 +806,10 @@ async def balance_command(update, context):
     )
 
 async def set_initial_balance_command(update, context):
-    await update.message.reply_text("Please enter the initial balance (in MDL).")
+    await update.message.reply_text(
+        "Please enter the initial balance (in MDL).",
+        reply_markup=get_main_keyboard(update.effective_chat.id)
+    )
     context.user_data["await_initial_balance"] = True
 
 async def receive_initial_balance(update, context):
@@ -1223,6 +1241,10 @@ async def add_note_start(update, context):
     walk_id = int(query.data.replace("add_note_", ""))
     context.user_data["note_walk_id"] = walk_id
     await query.edit_message_text(f"📝 Enter a note for walk #{walk_id} (or /cancel to skip):")
+    await query.message.reply_text(
+        "👇 Enter your note below or use the menu:",
+        reply_markup=get_main_keyboard(query.message.chat.id)
+    )
     return ASK_WALK_NOTE
 
 async def receive_walk_note(update, context):
