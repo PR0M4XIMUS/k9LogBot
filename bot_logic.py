@@ -225,7 +225,7 @@ async def detailed_report_command(update, context):
     # Format each transaction with emoji based on type
     transaction_lines = []
     for t in transactions[:15]:  # Show 15 most recent in summary
-        tid, timestamp, amount, ttype, description = t
+        tid, timestamp, amount, ttype, description, *_ = t
         date_str = timestamp[:16].replace('T', ' ')  # Format: YYYY-MM-DD HH:MM
         
         if ttype == 'walk':
@@ -274,7 +274,7 @@ async def detailed_report_command(update, context):
         
         # Show delete buttons for last 10 transactions
         for t in transactions[:10]:
-            tid, timestamp, amount, ttype, description = t
+            tid, timestamp, amount, ttype, description, *_ = t
             date_str = timestamp[:10]
             
             if ttype == 'walk':
